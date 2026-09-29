@@ -12,7 +12,6 @@ st.set_page_config(page_title="NutriControl", page_icon="🍽️", layout="wide"
 def get_connection():
     return sqlite3.connect('nutricontrol.db', check_same_thread=False)
 
-# Adicionei a coluna 'origem' na tabela registros para auditoria (Manual vs Catraca)
 def init_db():
     conn = get_connection()
     c = conn.cursor()
@@ -20,23 +19,26 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, cod_erp TEXT, classificacao TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS tipos_refeicao
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, peso REAL)''')
-    # Usei try/except para garantir que a tabela seja criada com a coluna origem, ou atualizada se já existir
+    c.execute('''CREATE TABLE IF NOT EXISTS registros
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
+                  categoria TEXT, qtd INTEGER, vol_eq REAL)''')
+    
+    # ATUALIZAÇÃO: Força a criação da coluna 'origem' nos bancos de dados antigos que já estavam salvos
     try:
-        c.execute('''CREATE TABLE IF NOT EXISTS registros
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
-                      categoria TEXT, qtd INTEGER, vol_eq REAL, origem TEXT DEFAULT 'Manual')''')
+        c.execute("ALTER TABLE registros ADD COLUMN origem TEXT DEFAULT 'Manual'")
     except sqlite3.OperationalError:
-        pass # Se a coluna origem já existe, não faz nada. Na vida real teríamos script de migração.
+        pass # Se a coluna já existir, ele segue o jogo sem dar erro
+        
     conn.commit()
     conn.close()
 
 init_db()
 
 # ==========================================
-# MENU LATERAL E LOGO (NOVA COMPONENTE)
+# MENU LATERAL E LOGO (RESTAURADO)
 # ==========================================
-# Substituí sidebar.image pelo novo componente oficial para logos. Fica fixo no topo.
-st.logo("1000724841.png", link="http://localhost:8501") 
+# Voltamos para a imagem grande na barra lateral
+st.sidebar.image("1000724841.png", use_container_width=True) 
 st.sidebar.title("NutriControl")
 menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
 
@@ -155,7 +157,6 @@ elif menu == "Lançamento Diário":
         st.divider()
         st.subheader("Auditoria do Dia")
         data_auditoria = st.date_input("Escolha a data para verificar/excluir lançamentos:", datetime.today(), format="DD/MM/YYYY")
-        # Mostramos a Origem na tabela de auditoria para o gestor saber o que foi Catraca e o que foi Manual
         df_hoje = pd.read_sql_query('''
             SELECT r.id, c.nome as Setor, t.nome as Refeicao, r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Equivalente, r.origem as Origem 
             FROM registros r JOIN centros_custo c ON r.id_cc = c.id JOIN tipos_refeicao t ON r.id_refeicao = t.id 
@@ -196,7 +197,6 @@ elif menu == "Central de Importação":
                 if st.button("✅ Confirmar e Gravar Centros de Custo"):
                     conn = get_connection()
                     for index, row in df_up_cc.iterrows():
-                        # Validação simples de duplicidade por código
                         existente = conn.execute("SELECT id FROM centros_custo WHERE cod_erp=?", (str(row['Codigo']),)).fetchone()
                         if not existente:
                             conn.execute("INSERT INTO centros_custo (nome, cod_erp, classificacao) VALUES (?, ?, ?)", 
@@ -210,7 +210,7 @@ elif menu == "Central de Importação":
     with tab_prod:
         st.markdown("""
         **Regras para importar arquivo da Catraca:**
-        Para evitar erro no de-para de setores, **use o Código do Centro de Custo**.
+        Use o **Código do Centro de Custo**.
         Colunas obrigatórias: `Codigo_CC` | `Refeicao` | `Categoria` | `Quantidade`.
         """)
         
@@ -223,16 +223,14 @@ elif menu == "Central de Importação":
         if arquivo_prod is not None:
             try:
                 df_up_prod = pd.read_csv(arquivo_prod, sep=';') if arquivo_prod.name.endswith('.csv') else pd.read_excel(arquivo_prod)
-                st.info(f"O sistema gravará estes dados utilizando o último dia do mês selecionado: Final de {mes_catraca}/{ano_catraca}.")
+                st.info(f"O sistema gravará estes dados com a data de fechamento: Final de {mes_catraca}/{ano_catraca}.")
                 
-                # Preview dos dados
                 st.write("**Pré-visualização dos dados a serem importados:**")
                 st.dataframe(df_up_prod.head(10), use_container_width=True)
                 
                 if st.button("✅ Confirmar Gravação da Produção"):
                     conn = get_connection()
                     
-                    # Dicionários para buscar os IDs baseados no nome da refeição e no CODIGO do Centro de Custo
                     ccs_cadastrados = pd.read_sql_query("SELECT id, cod_erp FROM centros_custo", conn)
                     ref_cadastradas = pd.read_sql_query("SELECT id, nome, peso FROM tipos_refeicao", conn)
                     
@@ -240,7 +238,6 @@ elif menu == "Central de Importação":
                     dict_ref_nome = dict(zip(ref_cadastradas.nome.str.lower(), ref_cadastradas.id))
                     dict_peso = dict(zip(ref_cadastradas.id, ref_cadastradas.peso))
                     
-                    # Calcula o último dia do mês para a data fake da catraca
                     mes_num = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"].index(mes_catraca) + 1
                     ultimo_dia = calendar.monthrange(ano_catraca, mes_num)[1]
                     data_lancamento_catraca = f"{ano_catraca}-{mes_num:02d}-{ultimo_dia:02d}"
@@ -252,7 +249,6 @@ elif menu == "Central de Importação":
                         cod_excel = str(row['Codigo_CC']).strip()
                         ref_excel = str(row['Refeicao']).strip().lower()
                         
-                        # Verifica se o código da catraca existe no sistema
                         if cod_excel in dict_cc_cod and ref_excel in dict_ref_nome:
                             id_cc = dict_cc_cod[cod_excel]
                             id_ref = dict_ref_nome[ref_excel]
@@ -353,7 +349,6 @@ elif menu == "Painel Gerencial":
     st.header("Painel Gerencial e Consolidação de Dados")
     
     conn = get_connection()
-    # Adicionada a coluna Origem na query para aparecer na tabela de auditoria
     query = '''
     SELECT r.data as Data, c.nome as Centro_Custo, c.cod_erp as Codigo_CC, t.nome as Tipo, 
            r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Volume_Equivalente, r.origem as Origem
@@ -403,8 +398,6 @@ elif menu == "Painel Gerencial":
                 
                 st.markdown("#### Volume por Tipo de Refeição")
                 df_chart_refeicao = df_filtrado.groupby('Tipo')[coluna_valor].sum().reset_index()
-                
-                # GRÁFICO DINÂMICO MULTICORES (Streamlit usa a paleta para o eixo X automaticamente se 'color' for a mesma coluna do eixo X)
                 st.bar_chart(data=df_chart_refeicao, x='Tipo', y=coluna_valor, color='Tipo')
                 
                 st.markdown("#### Base de Rateio por Centro de Custo")
