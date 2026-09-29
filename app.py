@@ -31,7 +31,8 @@ init_db()
 # ==========================================
 st.sidebar.image("1000724841.png", use_container_width=True)
 st.sidebar.title("Nutri Control")
-menu = st.sidebar.radio("Navegação", ["Lançamento Diário", "Cadastros Base", "Dashboard e Exportação"])
+# Atualizamos o nome do módulo para englobar as duas visões
+menu = st.sidebar.radio("Navegação", ["Lançamento Diário", "Cadastros Base", "Painel Gerencial"])
 
 # ==========================================
 # MÓDULO 2: LANÇAMENTO DIÁRIO E CORREÇÕES
@@ -95,7 +96,7 @@ if menu == "Lançamento Diário":
             st.dataframe(df_hoje, hide_index=True, use_container_width=True)
             apagar_reg = st.selectbox("Cometeu um erro? Selecione um lançamento para remover", 
                                       df_hoje.apply(lambda x: f"ID {x['id']} - {x['Quantidade']}x {x['Refeicao']} ({x['Categoria']}) no {x['Setor']}", axis=1).tolist())
-            if st.button("🗑️ Excluir Lançamento Errado", key="del_reg"):
+            if st.button("🗑️️ Excluir Lançamento Errado", key="del_reg"):
                 id_to_delete = int(apagar_reg.split(" - ")[0].replace("ID ", ""))
                 conn.execute("DELETE FROM registros WHERE id=?", (id_to_delete,))
                 conn.commit()
@@ -183,10 +184,10 @@ elif menu == "Cadastros Base":
             conn.close()
 
 # ==========================================
-# MÓDULO 3: DASHBOARD E EXPORTAÇÃO
+# MÓDULO 3: PAINEL GERENCIAL E EXPORTAÇÃO
 # ==========================================
-elif menu == "Dashboard e Exportação":
-    st.header("Consulta e Rateio Consolidado")
+elif menu == "Painel Gerencial":
+    st.header("Painel Gerencial e Consolidação de Dados")
     
     conn = get_connection()
     query = '''
@@ -207,7 +208,6 @@ elif menu == "Dashboard e Exportação":
         max_date = df['Data'].max().date()
         
         st.markdown("### Filtros de Análise")
-        # Criadas 3 colunas para acomodar os novos filtros
         col_f1, col_f2, col_f3 = st.columns(3)
         
         with col_f1:
@@ -230,7 +230,6 @@ elif menu == "Dashboard e Exportação":
         else:
             data_inicio = data_fim = periodo[0]
             
-        # Filtro aplicando as 3 regras simultaneamente (Data, Tipo e Setor)
         mask = (df['Data'].dt.date >= data_inicio) & (df['Data'].dt.date <= data_fim) & (df['Tipo'].isin(tipos_selecionados)) & (df['Centro_Custo'].isin(ccs_selecionados))
         df_filtrado = df[mask].copy()
         
@@ -239,34 +238,33 @@ elif menu == "Dashboard e Exportação":
         if df_filtrado.empty:
             st.warning("Nenhum dado encontrado com os filtros selecionados.")
         else:
-            visao = st.radio("Selecione a métrica visual para os relatórios abaixo:", ["Volume Equivalente (Base Ponderada)", "Quantidade Absoluta (Operação)"], horizontal=True)
+            visao = st.radio("Métrica Visual (Aplica-se aos gráficos e tabelas):", ["Volume Equivalente (Base Ponderada)", "Quantidade Absoluta (Operação)"], horizontal=True)
             coluna_valor = 'Volume_Equivalente' if "Equivalente" in visao else 'Quantidade'
             
-            tab1, tab2 = st.tabs(["📊 Visão Consolidada (Detalhada)", "📈 Comparativo Mensal (Tendência)"])
+            tab1, tab2 = st.tabs(["📊 Visão por Refeições e Rateio", "📈 Comparativo Mensal (Tendência)"])
             
             with tab1:
-                st.markdown(f"**Rateio detalhado do período:** {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
+                st.markdown(f"**Consolidação do período:** {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
                 
-                # Agrupa por Centro de Custo E por Tipo de Refeição
+                # GRÁFICO FOCADO NA NUTRIÇÃO (Eixo X = Refeição, Cores = Categoria)
+                st.markdown("#### Volume por Tipo de Refeição e Comensal")
+                df_chart_refeicao = df_filtrado.groupby(['Tipo', 'Categoria'])[coluna_valor].sum().reset_index()
+                # Transforma para o formato ideal do gráfico (Refeições na base, Categorias empilhadas)
+                df_chart_pivot = df_chart_refeicao.pivot(index='Tipo', columns='Categoria', values=coluna_valor).fillna(0)
+                st.bar_chart(df_chart_pivot)
+                
+                # TABELA FOCADA NA CONTROLADORIA (Linhas = Centros de Custo)
+                st.markdown("#### Base de Rateio por Centro de Custo")
                 df_agrupado_tipo = df_filtrado.groupby(['Centro_Custo', 'Codigo_CC', 'Tipo'])[coluna_valor].sum().reset_index()
-                
-                # Transforma a tabela em uma Matriz (Tabela Dinâmica)
                 df_pivot = df_agrupado_tipo.pivot_table(index=['Centro_Custo', 'Codigo_CC'], columns='Tipo', values=coluna_valor, aggfunc='sum', fill_value=0).reset_index()
                 
-                # Soma a linha para gerar o "Total do Setor"
                 colunas_refeicoes = [col for col in df_pivot.columns if col not in ['Centro_Custo', 'Codigo_CC']]
                 df_pivot['Total_Setor'] = df_pivot[colunas_refeicoes].sum(axis=1)
                 
-                c1, c2 = st.columns([2, 1])
-                with c1:
-                    # Gráfico de Barras Empilhadas (mostra a composição das refeições dentro da barra do setor)
-                    df_chart = df_pivot.set_index('Centro_Custo').drop(columns=['Codigo_CC', 'Total_Setor'])
-                    st.bar_chart(df_chart)
-                    
-                with c2:
-                    st.dataframe(df_pivot, hide_index=True, use_container_width=True)
-                    csv = df_pivot.to_csv(index=False, sep=';', decimal=',')
-                    st.download_button("📥 Exportar Rateio Matricial (.CSV)", data=csv, file_name='rateio_detalhado_nutricontrol.csv', mime='text/csv', use_container_width=True)
+                # Tabela ocupando a largura total
+                st.dataframe(df_pivot, hide_index=True, use_container_width=True)
+                csv = df_pivot.to_csv(index=False, sep=';', decimal=',')
+                st.download_button("📥 Exportar Matriz de Rateio (.CSV)", data=csv, file_name='rateio_detalhado_nutricontrol.csv', mime='text/csv', use_container_width=True)
                     
             with tab2:
                 st.markdown("**Comparativo de Consumo Mês a Mês** (Barras Consolidadas)")
