@@ -30,7 +30,6 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
                   categoria TEXT, qtd INTEGER, vol_eq REAL, origem TEXT DEFAULT 'Manual', lote_id TEXT DEFAULT 'Manual')''')
     
-    # Compatibilidade com bases anteriores (migra termos antigos para 'Importação')
     try:
         c.execute("ALTER TABLE registros ADD COLUMN origem TEXT DEFAULT 'Manual'")
     except sqlite3.OperationalError:
@@ -40,7 +39,6 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     
-    # Padroniza registros antigos que estavam como 'Catraca' para 'Importação'
     try:
         c.execute("UPDATE registros SET origem = 'Importação' WHERE origem = 'Catraca'")
         conn.commit()
@@ -54,7 +52,7 @@ init_db()
 # ==========================================
 # MENU LATERAL E LOGO
 # ==========================================
-st.sidebar.image("1000724841.png", use_container_width=True) 
+st.sidebar.image("Logo_NC.png", use_container_width=True) 
 st.sidebar.title("NutriControl")
 menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
 
@@ -134,7 +132,7 @@ elif menu == "Lançamento Diário":
                     dict_peso = dict(zip(refeicoes.id, refeicoes.peso))
                     ref_selecionada = st.selectbox("Tipo de Refeição", refeicoes['nome'].tolist())
                 with col5:
-                    qtd = st.number_input("Quantidade", min_value=1, step=1, help="Insira o valor e clique em Gravar abaixo")
+                    qtd = st.number_input("Quantidade", min_value=1, step=1)
                 
                 if st.form_submit_button("Registrar Produção", use_container_width=True):
                     id_cc = dict_cc[cc_selecionado]
@@ -158,7 +156,7 @@ elif menu == "Lançamento Diário":
                 with cL3:
                     cat_lote = st.selectbox("Categoria", ["Paciente", "Acompanhante", "Funcionário"], key="catlote")
                 
-                st.markdown("**2. Informe as Quantidades:** *(Preencha os campos e clique no botão ao final)*")
+                st.markdown("**2. Informe as Quantidades:**")
                 cols_refeicoes = st.columns(4) 
                 qtd_lote_inputs = {}
                 dict_peso = dict(zip(refeicoes.id, refeicoes.peso))
@@ -245,23 +243,27 @@ elif menu == "Central de Importação":
         if arquivo_cc is not None:
             try:
                 if arquivo_cc.name.endswith('.csv'):
+                    # O sep=None com engine='python' detecta automaticamente se o arquivo usa vírgula, ponto e vírgula ou TAB
                     df_up_cc = pd.read_csv(arquivo_cc, sep=None, engine='python', encoding='latin1', dtype=str)
                 else:
                     df_up_cc = pd.read_excel(arquivo_cc, dtype=str)
                     
-                st.dataframe(df_up_cc.head(), use_container_width=True)
+                st.write("**Pré-visualização dos Centros de Custo a importar:**")
+                st.dataframe(df_up_cc.head(20), use_container_width=True)
                 
                 if st.button("✅ Confirmar e Gravar Centros de Custo"):
                     conn = get_connection()
+                    gravados = 0
                     for index, row in df_up_cc.iterrows():
                         codigo_limpo = str(row['Codigo']).strip()
                         existente = conn.execute("SELECT id FROM centros_custo WHERE cod_erp=?", (codigo_limpo,)).fetchone()
                         if not existente:
                             conn.execute("INSERT INTO centros_custo (nome, cod_erp, classificacao) VALUES (?, ?, ?)", 
                                          (str(row['Nome']).strip(), codigo_limpo, str(row['Classificacao']).strip()))
+                            gravados += 1
                     conn.commit()
                     conn.close()
-                    st.success("Centros de custo importados com sucesso!")
+                    st.success(f"Centros de custo importados com sucesso! ({gravados} novos registros gravados)")
             except Exception as e:
                 st.error(f"Erro ao ler o arquivo. Detalhe: {e}")
 
@@ -359,7 +361,7 @@ elif menu == "Central de Importação":
             lotes_disponiveis = df_lotes['Lote'].tolist()
             lote_para_excluir = st.selectbox("Selecione um lote para exclusão completa (caso tenha subido errado):", lotes_disponiveis)
             
-            if st.button("🗑️️ Excluir Lote Inteiro"):
+            if st.button("🗑 Excluir Lote Inteiro"):
                 conn = get_connection()
                 conn.execute("DELETE FROM registros WHERE lote_id = ?", (lote_para_excluir,))
                 conn.commit()
