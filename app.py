@@ -31,7 +31,6 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
                   categoria TEXT, qtd INTEGER, vol_eq REAL, origem TEXT DEFAULT 'Manual', lote_id TEXT DEFAULT 'Manual')''')
     
-    # Garante compatibilidade com bancos antigos
     try:
         c.execute("ALTER TABLE registros ADD COLUMN origem TEXT DEFAULT 'Manual'")
     except sqlite3.OperationalError:
@@ -49,7 +48,7 @@ init_db()
 # ==========================================
 # MENU LATERAL E LOGO
 # ==========================================
-st.sidebar.image("1000724841.png", use_container_width=True) 
+st.sidebar.image("Logo_NC.png", use_container_width=True) 
 st.sidebar.title("NutriControl")
 menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
 
@@ -210,7 +209,7 @@ elif menu == "Lançamento Diário":
     conn.close()
 
 # ==========================================
-# MÓDULO: CENTRAL DE IMPORTAÇÃO (COM GESTÃO DE LOTES)
+# MÓDULO: CENTRAL DE IMPORTAÇÃO (MOTOR FLEXÍVEL)
 # ==========================================
 elif menu == "Central de Importação":
     st.header("Upload e Importação de Dados em Lote")
@@ -228,7 +227,8 @@ elif menu == "Central de Importação":
         if arquivo_cc is not None:
             try:
                 if arquivo_cc.name.endswith('.csv'):
-                    df_up_cc = pd.read_csv(arquivo_cc, sep=';', encoding='latin1', dtype=str)
+                    # sep=None + engine='python' detecta automaticamente se usou vírgula, ponto e vírgula ou TAB
+                    df_up_cc = pd.read_csv(arquivo_cc, sep=None, engine='python', encoding='latin1', dtype=str)
                 else:
                     df_up_cc = pd.read_excel(arquivo_cc, dtype=str)
                     
@@ -264,13 +264,13 @@ elif menu == "Central de Importação":
         if arquivo_prod is not None:
             try:
                 if arquivo_prod.name.endswith('.csv'):
-                    df_up_prod = pd.read_csv(arquivo_prod, sep=';', encoding='latin1', dtype=str)
+                    df_up_prod = pd.read_csv(arquivo_prod, sep=None, engine='python', encoding='latin1', dtype=str)
                 else:
                     df_up_prod = pd.read_excel(arquivo_prod, dtype=str)
                     
                 st.info(f"O sistema gravará estes dados com a data de fechamento: Final de {mes_catraca}/{ano_catraca}.")
                 st.write("**Pré-visualização dos dados a serem importados:**")
-                st.dataframe(df_up_prod.head(10), use_container_width=True)
+                st.dataframe(df_up_prod.head(20), use_container_width=True)
                 
                 if st.button("✅ Confirmar Gravação da Produção"):
                     conn = get_connection()
@@ -280,7 +280,6 @@ elif menu == "Central de Importação":
                     
                     dict_cc_cod = dict(zip(ccs_cadastrados.cod_erp.astype(str).str.strip(), ccs_cadastrados.id))
                     
-                    # Normaliza as refeições cadastradas para match sem erro de acentuação/maiúsculas
                     dict_ref_normalizado = {}
                     dict_peso = {}
                     for _, r in ref_cadastradas.iterrows():
@@ -292,7 +291,6 @@ elif menu == "Central de Importação":
                     ultimo_dia = calendar.monthrange(ano_catraca, mes_num)[1]
                     data_lancamento_catraca = f"{ano_catraca}-{mes_num:02d}-{ultimo_dia:02d}"
                     
-                    # Cria um ID de Lote único baseado no momento do upload
                     lote_id_gerado = f"LOTE_{datetime.today().strftime('%d%m%Y_%H%M%S')}"
                     
                     erros = 0
@@ -369,7 +367,7 @@ elif menu == "Cadastros Base":
                     conn = get_connection()
                     existente = conn.execute("SELECT id FROM centros_custo WHERE nome=? OR cod_erp=?", (nome_cc, cod_erp)).fetchone()
                     if existente:
-                        st.error("⚠️️ Já existe um Centro de Custo com este Nome ou Código.")
+                        st.error("⚠️ Já existe um Centro de Custo com este Nome ou Código.")
                     else:
                         conn.execute("INSERT INTO centros_custo (nome, cod_erp, classificacao) VALUES (?, ?, ?)", (nome_cc, cod_erp, classificacao))
                         conn.commit()
