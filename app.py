@@ -3,6 +3,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import calendar
+import unicodedata
 
 # ==========================================
 # CONFIGURAÇÃO DA PÁGINA E BANCO DE DADOS
@@ -11,6 +12,13 @@ st.set_page_config(page_title="NutriControl", page_icon="🍽️", layout="wide"
 
 def get_connection():
     return sqlite3.connect('nutricontrol.db', check_same_thread=False)
+
+def normalizar_texto(texto):
+    """Remove acentos e padroniza para minúsculas para evitar erros de match (ex: Almoço vs Almoco)"""
+    if not isinstance(texto, str):
+        return ""
+    nfkd = unicodedata.normalize('NFKD', texto)
+    return "".join([c for c in nfkd if not unicodedata.combining(c)]).strip().lower()
 
 def init_db():
     conn = get_connection()
@@ -21,10 +29,15 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, peso REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS registros
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
-                  categoria TEXT, qtd INTEGER, vol_eq REAL)''')
+                  categoria TEXT, qtd INTEGER, vol_eq REAL, origem TEXT DEFAULT 'Manual', lote_id TEXT DEFAULT 'Manual')''')
     
+    # Garante compatibilidade com bancos antigos
     try:
         c.execute("ALTER TABLE registros ADD COLUMN origem TEXT DEFAULT 'Manual'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE registros ADD COLUMN lote_id TEXT DEFAULT 'Manual'")
     except sqlite3.OperationalError:
         pass
         
@@ -41,41 +54,45 @@ st.sidebar.title("NutriControl")
 menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
 
 # ==========================================
-# MÓDULO 0: TELA INICIAL
+# MÓDULO 0: TELA INICIAL (DINÂMICA POR MÊS)
 # ==========================================
 if menu == "Início":
     st.title("Bem-vindo ao NutriControl")
     st.markdown("Sistema de Gestão e Rateio de Custos de Nutrição Hospitalar")
     st.divider()
     
-    hoje_str = datetime.today().strftime("%Y-%m-%d")
-    hoje_br = datetime.today().strftime("%d/%m/%Y")
+    mes_atual_str = datetime.today().strftime("%Y-%m")
+    mes_atual_br = datetime.today().strftime("%B/%Y")
     
-    st.subheader(f"Visão Operacional - Hoje ({hoje_br})")
+    st.subheader(f"Visão Executiva do Mês Atual ({mes_atual_br})")
     
     conn = get_connection()
-    df_hoje = pd.read_sql_query("SELECT qtd, vol_eq FROM registros WHERE data = ?", conn, params=(hoje_str,))
+    df_mes = pd.read_sql_query("SELECT qtd, vol_eq FROM registros WHERE substr(data, 1, 7) = ?", conn, params=(mes_atual_str,))
     conn.close()
     
     col1, col2, col3 = st.columns(3)
-    if df_hoje.empty:
-        col1.metric("Refeições Físicas Servidas", "0")
-        col2.metric("Volume Equivalente (Base)", "0.0")
-        col3.metric("Lançamentos Registrados", "0")
+    if df_mes.empty:
+        col1.metric("Refeições Físicas no Mês", "0")
+        col2.metric("Volume Equivalente (Mês)", "0.0")
+        col3.metric("Total de Registros", "0")
+        st.info("💡 Nenhum dado registrado para este mês ainda. Utilize o menu lateral para iniciar os lançamentos ou importar arquivos.")
     else:
-        total_qtd = df_hoje['qtd'].sum()
-        total_vol = df_hoje['vol_eq'].sum()
-        col1.metric("Refeições Físicas Servidas", f"{total_qtd:,}".replace(",", "."))
-        col2.metric("Volume Equivalente (Base)", f"{total_vol:,.1f}".replace(".", ","))
-        col3.metric("Lançamentos Registrados", str(len(df_hoje)))
+        total_qtd = df_mes['qtd'].sum()
+        total_vol = df_mes['vol_eq'].sum()
+        total_lancamentos = len(df_mes)
         
-    st.info("💡 Navegue pelo menu lateral para gerenciar as operações ou acessar os relatórios gerenciais.")
+        col1.metric("Refeições Físicas no Mês", f"{total_qtd:,}".replace(",", "."))
+        col2.metric("Volume Equivalente (Mês)", f"{total_vol:,.1f}".replace(".", ","))
+        col3.metric("Total de Registros", f"{total_lancamentos}")
+        
+    st.divider()
+    st.info("💡 Navegue pelo menu lateral para gerenciar as operações, monitorar lotes ou extrair o rateio gerencial.")
 
 # ==========================================
-# MÓDULO 2: LANÇAMENTO DIÁRIO E LOTE
+# MÓDULO 2: LANÇAMENTO DIÁRIO, LOTE E AUDITORIA DE IMPORTADOS
 # ==========================================
 elif menu == "Lançamento Diário":
-    st.header("Lançamento Diário de Refeições")
+    st.header("Lançamento e Auditoria de Produção")
     
     conn = get_connection()
     ccs = pd.read_sql_query("SELECT id, nome, cod_erp FROM centros_custo", conn)
@@ -84,7 +101,7 @@ elif menu == "Lançamento Diário":
     if ccs.empty or refeicoes.empty:
         st.warning("⚠️ Cadastre Centros de Custo e Tipos de Refeição no módulo 'Cadastros Base' primeiro.")
     else:
-        tab1, tab2 = st.tabs(["Lançamento Individual", "⚡ Lançamento em Lote (Rápido)"])
+        tab1, tab2, tab3 = st.tabs(["Lançamento Individual", "⚡ Lançamento em Lote (Rápido)", "🏭 Registros Importados (Catraca)"])
         
         with tab1:
             with st.form("form_lancamento", clear_on_submit=True):
@@ -109,8 +126,8 @@ elif menu == "Lançamento Diário":
                     id_ref = dict_ref[ref_selecionada]
                     vol_eq = qtd * dict_peso[id_ref]
                     
-                    conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                              (data_lanc.strftime("%Y-%m-%d"), id_cc, id_ref, categoria, qtd, vol_eq, 'Manual'))
+                    conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem, lote_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                              (data_lanc.strftime("%Y-%m-%d"), id_cc, id_ref, categoria, qtd, vol_eq, 'Manual', 'Manual'))
                     conn.commit()
                     st.success("Lançamento efetuado com sucesso!")
                     st.rerun()
@@ -141,8 +158,8 @@ elif menu == "Lançamento Diário":
                     for id_ref, qt in qtd_lote_inputs.items():
                         if qt > 0:
                             vol_eq = qt * dict_peso[id_ref]
-                            conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                      (data_lote.strftime("%Y-%m-%d"), id_cc, id_ref, cat_lote, qt, vol_eq, 'Manual'))
+                            conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem, lote_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                      (data_lote.strftime("%Y-%m-%d"), id_cc, id_ref, cat_lote, qt, vol_eq, 'Manual', 'Manual'))
                             insercoes += 1
                     
                     if insercoes > 0:
@@ -152,19 +169,40 @@ elif menu == "Lançamento Diário":
                     else:
                         st.warning("Nenhuma quantidade maior que zero informada.")
 
+        with tab3:
+            st.markdown("#### Auditoria de Dados Importados da Catraca")
+            df_catraca = pd.read_sql_query('''
+                SELECT r.id, r.lote_id as Lote, r.data as Data_Competencia, c.nome as Setor, t.nome as Refeicao, r.categoria as Categoria, r.qtd as Quantidade 
+                FROM registros r JOIN centros_custo c ON r.id_cc = c.id JOIN tipos_refeicao t ON r.id_refeicao = t.id 
+                WHERE r.origem = 'Catraca' ORDER BY r.id DESC
+            ''', conn)
+            
+            if df_catraca.empty:
+                st.info("Nenhum dado importado via catraca até o momento.")
+            else:
+                st.dataframe(df_catraca, hide_index=True, use_container_width=True)
+                apagar_cat = st.selectbox("Selecionar registro importado para remover:", df_catraca.apply(lambda x: f"ID {x['id']} - [Lote: {x['Lote']}] {x['Quantidade']}x {x['Refeicao']} no {x['Setor']}", axis=1).tolist())
+                if st.button("🗑️ Excluir Registro Importado Selecionado"):
+                    id_cat_del = int(apagar_cat.split(" - ")[0].replace("ID ", ""))
+                    conn.execute("DELETE FROM registros WHERE id=?", (id_cat_del,))
+                    conn.commit()
+                    st.rerun()
+
         st.divider()
-        st.subheader("Auditoria do Dia")
-        data_auditoria = st.date_input("Escolha a data para verificar/excluir lançamentos:", datetime.today(), format="DD/MM/YYYY")
+        st.subheader("Auditoria de Lançamentos Manuais do Dia")
+        data_auditoria = st.date_input("Escolha a data para verificar/excluir lançamentos manuais:", datetime.today(), format="DD/MM/YYYY")
         df_hoje = pd.read_sql_query('''
-            SELECT r.id, c.nome as Setor, t.nome as Refeicao, r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Equivalente, r.origem as Origem 
+            SELECT r.id, c.nome as Setor, t.nome as Refeicao, r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Equivalente 
             FROM registros r JOIN centros_custo c ON r.id_cc = c.id JOIN tipos_refeicao t ON r.id_refeicao = t.id 
-            WHERE r.data = ?
+            WHERE r.data = ? AND r.origem = 'Manual'
         ''', conn, params=(data_auditoria.strftime("%Y-%m-%d"),))
         
-        if not df_hoje.empty:
+        if df_hoje.empty:
+            st.info(f"Nenhum lançamento manual registrado em {data_auditoria.strftime('%d/%m/%Y')}.")
+        else:
             st.dataframe(df_hoje, hide_index=True, use_container_width=True)
-            apagar_reg = st.selectbox("Excluir lançamento:", df_hoje.apply(lambda x: f"ID {x['id']} - {x['Quantidade']}x {x['Refeicao']} ({x['Categoria']}) no {x['Setor']} [{x['Origem']}]", axis=1).tolist())
-            if st.button("🗑 Excluir Selecionado"):
+            apagar_reg = st.selectbox("Excluir lançamento manual:", df_hoje.apply(lambda x: f"ID {x['id']} - {x['Quantidade']}x {x['Refeicao']} ({x['Categoria']}) no {x['Setor']}", axis=1).tolist())
+            if st.button("🗑 Excluir Manual Selecionado"):
                 id_to_delete = int(apagar_reg.split(" - ")[0].replace("ID ", ""))
                 conn.execute("DELETE FROM registros WHERE id=?", (id_to_delete,))
                 conn.commit()
@@ -172,12 +210,12 @@ elif menu == "Lançamento Diário":
     conn.close()
 
 # ==========================================
-# MÓDULO: CENTRAL DE IMPORTAÇÃO (COM FORÇA DE TEXTO - DTYPE=STR)
+# MÓDULO: CENTRAL DE IMPORTAÇÃO (COM GESTÃO DE LOTES)
 # ==========================================
 elif menu == "Central de Importação":
     st.header("Upload e Importação de Dados em Lote")
     
-    tab_cc, tab_prod = st.tabs(["🏢 Importar Centros de Custo", "🏭 Importar Produção (Catraca)"])
+    tab_cc, tab_prod, tab_hist = st.tabs(["🏢 Importar Centros de Custo", "🏭 Importar Produção (Catraca)", "📋 Histórico de Lotes"])
     
     with tab_cc:
         st.markdown("""
@@ -189,7 +227,6 @@ elif menu == "Central de Importação":
         
         if arquivo_cc is not None:
             try:
-                # O parâmetro dtype=str OBRIGA o sistema a ler 1.010 como texto, preservando o zero
                 if arquivo_cc.name.endswith('.csv'):
                     df_up_cc = pd.read_csv(arquivo_cc, sep=';', encoding='latin1', dtype=str)
                 else:
@@ -226,14 +263,12 @@ elif menu == "Central de Importação":
         
         if arquivo_prod is not None:
             try:
-                # O parâmetro dtype=str OBRIGA o sistema a ler códigos com zero à esquerda/direita como texto
                 if arquivo_prod.name.endswith('.csv'):
                     df_up_prod = pd.read_csv(arquivo_prod, sep=';', encoding='latin1', dtype=str)
                 else:
                     df_up_prod = pd.read_excel(arquivo_prod, dtype=str)
                     
                 st.info(f"O sistema gravará estes dados com a data de fechamento: Final de {mes_catraca}/{ano_catraca}.")
-                
                 st.write("**Pré-visualização dos dados a serem importados:**")
                 st.dataframe(df_up_prod.head(10), use_container_width=True)
                 
@@ -243,31 +278,39 @@ elif menu == "Central de Importação":
                     ccs_cadastrados = pd.read_sql_query("SELECT id, cod_erp FROM centros_custo", conn)
                     ref_cadastradas = pd.read_sql_query("SELECT id, nome, peso FROM tipos_refeicao", conn)
                     
-                    dict_cc_cod = dict(zip(ccs_cadastrados.cod_erp.astype(str), ccs_cadastrados.id))
-                    dict_ref_nome = dict(zip(ref_cadastradas.nome.str.lower(), ref_cadastradas.id))
-                    dict_peso = dict(zip(ref_cadastradas.id, ref_cadastradas.peso))
+                    dict_cc_cod = dict(zip(ccs_cadastrados.cod_erp.astype(str).str.strip(), ccs_cadastrados.id))
+                    
+                    # Normaliza as refeições cadastradas para match sem erro de acentuação/maiúsculas
+                    dict_ref_normalizado = {}
+                    dict_peso = {}
+                    for _, r in ref_cadastradas.iterrows():
+                        nome_norm = normalizar_texto(r['nome'])
+                        dict_ref_normalizado[nome_norm] = r['id']
+                        dict_peso[r['id']] = r['peso']
                     
                     mes_num = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"].index(mes_catraca) + 1
                     ultimo_dia = calendar.monthrange(ano_catraca, mes_num)[1]
                     data_lancamento_catraca = f"{ano_catraca}-{mes_num:02d}-{ultimo_dia:02d}"
+                    
+                    # Cria um ID de Lote único baseado no momento do upload
+                    lote_id_gerado = f"LOTE_{datetime.today().strftime('%d%m%Y_%H%M%S')}"
                     
                     erros = 0
                     sucessos = 0
                     
                     for index, row in df_up_prod.iterrows():
                         cod_excel = str(row['Codigo_CC']).strip()
-                        ref_excel = str(row['Refeicao']).strip().lower()
+                        ref_excel_norm = normalizar_texto(str(row['Refeicao']))
                         
-                        if cod_excel in dict_cc_cod and ref_excel in dict_ref_nome:
+                        if cod_excel in dict_cc_cod and ref_excel_norm in dict_ref_normalizado:
                             id_cc = dict_cc_cod[cod_excel]
-                            id_ref = dict_ref_nome[ref_excel]
-                            # Como forçamos tudo a ser texto na leitura, convertemos apenas a Quantidade para número na hora da matemática
+                            id_ref = dict_ref_normalizado[ref_excel_norm]
                             qtd = int(float(row['Quantidade'])) 
                             vol_eq = qtd * dict_peso[id_ref]
                             cat = str(row['Categoria']).strip()
                             
-                            conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                      (data_lancamento_catraca, id_cc, id_ref, cat, qtd, vol_eq, 'Catraca'))
+                            conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem, lote_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                      (data_lancamento_catraca, id_cc, id_ref, cat, qtd, vol_eq, 'Catraca', lote_id_gerado))
                             sucessos += 1
                         else:
                             erros += 1
@@ -276,12 +319,36 @@ elif menu == "Central de Importação":
                     conn.close()
                     
                     if erros > 0:
-                        st.warning(f"{sucessos} lançamentos importados. {erros} linhas ignoradas (Código do Setor ou Nome da Refeição não encontrados no sistema).")
+                        st.warning(f"⚠️ {sucessos} lançamentos importados com sucesso no lote {lote_id_gerado}. {erros} linhas ignoradas (Verifique se o Código do Setor ou o Nome da Refeição conferem exatamente com os Cadastros Base).")
                     else:
-                        st.success(f"{sucessos} lançamentos importados com sucesso!")
+                        st.success(f"✅ {sucessos} lançamentos importados com sucesso sob o lote {lote_id_gerado}!")
                         
             except Exception as e:
                 st.error(f"Erro na leitura do arquivo. Certifique-se de que os nomes das colunas estão exatos. Detalhe: {e}")
+
+    with tab_hist:
+        st.markdown("#### Histórico de Lotes Importados via Catraca")
+        conn = get_connection()
+        df_lotes = pd.read_sql_query('''
+            SELECT lote_id as Lote, data as Data_Competencia, count(*) as Total_Registros, sum(qtd) as Total_Fisico 
+            FROM registros WHERE origem = 'Catraca' GROUP BY lote_id, data ORDER BY data DESC
+        ''', conn)
+        conn.close()
+        
+        if df_lotes.empty:
+            st.info("Nenhum lote de catraca importado até o momento.")
+        else:
+            st.dataframe(df_lotes, hide_index=True, use_container_width=True)
+            lotes_disponiveis = df_lotes['Lote'].tolist()
+            lote_para_excluir = st.selectbox("Selecione um lote para exclusão completa (caso tenha subido errado):", lotes_disponiveis)
+            
+            if st.button("🗑️ Excluir Lote Inteiro"):
+                conn = get_connection()
+                conn.execute("DELETE FROM registros WHERE lote_id = ?", (lote_para_excluir,))
+                conn.commit()
+                conn.close()
+                st.success(f"Lote {lote_para_excluir} removido com sucesso!")
+                st.rerun()
 
 # ==========================================
 # MÓDULO 1: CADASTROS BASE
@@ -302,7 +369,7 @@ elif menu == "Cadastros Base":
                     conn = get_connection()
                     existente = conn.execute("SELECT id FROM centros_custo WHERE nome=? OR cod_erp=?", (nome_cc, cod_erp)).fetchone()
                     if existente:
-                        st.error("⚠️ Já existe um Centro de Custo com este Nome ou Código.")
+                        st.error("⚠️️ Já existe um Centro de Custo com este Nome ou Código.")
                     else:
                         conn.execute("INSERT INTO centros_custo (nome, cod_erp, classificacao) VALUES (?, ?, ?)", (nome_cc, cod_erp, classificacao))
                         conn.commit()
