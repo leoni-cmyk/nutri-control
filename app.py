@@ -50,7 +50,6 @@ if menu == "Lançamento Diário":
             col1, col2, col3, col4, col5 = st.columns(5)
             
             with col1:
-                # O formato BR foi adicionado aqui para quando digitar direto no campo de lançamento também
                 data_lanc = st.date_input("Data", datetime.today(), format="DD/MM/YYYY")
             with col2:
                 dict_cc = dict(zip(ccs.nome, ccs.id))
@@ -184,10 +183,10 @@ elif menu == "Cadastros Base":
             conn.close()
 
 # ==========================================
-# MÓDULO 3: DASHBOARD DE BI E EXPORTAÇÃO
+# MÓDULO 3: DASHBOARD E EXPORTAÇÃO
 # ==========================================
 elif menu == "Dashboard e Exportação":
-    st.header("Controladoria e Inteligência de Dados")
+    st.header("Consulta e Rateio Consolidado")
     
     conn = get_connection()
     query = '''
@@ -208,11 +207,11 @@ elif menu == "Dashboard e Exportação":
         max_date = df['Data'].max().date()
         
         st.markdown("### Filtros de Análise")
-        col_f1, col_f2 = st.columns(2)
+        # Criadas 3 colunas para acomodar os novos filtros
+        col_f1, col_f2, col_f3 = st.columns(3)
         
         with col_f1:
-            # Filtro com formato de data BR (DD/MM/YYYY)
-            periodo = st.date_input("Selecione o Período (Início e Fim):", 
+            periodo = st.date_input("Período (Início e Fim):", 
                                     [min_date, max_date], 
                                     min_value=min_date, 
                                     max_value=max_date,
@@ -220,51 +219,63 @@ elif menu == "Dashboard e Exportação":
             
         with col_f2:
             tipos_disponiveis = df['Tipo'].unique().tolist()
-            tipos_selecionados = st.multiselect("Filtrar por Tipos de Refeição:", tipos_disponiveis, default=tipos_disponiveis)
+            tipos_selecionados = st.multiselect("Tipos de Refeição:", tipos_disponiveis, default=tipos_disponiveis)
+            
+        with col_f3:
+            ccs_disponiveis = df['Centro_Custo'].unique().tolist()
+            ccs_selecionados = st.multiselect("Centros de Custo:", ccs_disponiveis, default=ccs_disponiveis)
             
         if len(periodo) == 2:
             data_inicio, data_fim = periodo
         else:
             data_inicio = data_fim = periodo[0]
             
-        mask = (df['Data'].dt.date >= data_inicio) & (df['Data'].dt.date <= data_fim) & (df['Tipo'].isin(tipos_selecionados))
+        # Filtro aplicando as 3 regras simultaneamente (Data, Tipo e Setor)
+        mask = (df['Data'].dt.date >= data_inicio) & (df['Data'].dt.date <= data_fim) & (df['Tipo'].isin(tipos_selecionados)) & (df['Centro_Custo'].isin(ccs_selecionados))
         df_filtrado = df[mask].copy()
         
         st.divider()
         
         if df_filtrado.empty:
-            st.warning("Nenhum dado encontrado para o período e refeições selecionados.")
+            st.warning("Nenhum dado encontrado com os filtros selecionados.")
         else:
             visao = st.radio("Selecione a métrica visual para os relatórios abaixo:", ["Volume Equivalente (Base Ponderada)", "Quantidade Absoluta (Operação)"], horizontal=True)
             coluna_valor = 'Volume_Equivalente' if "Equivalente" in visao else 'Quantidade'
             
-            tab1, tab2 = st.tabs(["📊 Visão Consolidada (Fechamento)", "📈 Comparativo Mensal (Tendência)"])
+            tab1, tab2 = st.tabs(["📊 Visão Consolidada (Detalhada)", "📈 Comparativo Mensal (Tendência)"])
             
             with tab1:
-                st.markdown(f"**Rateio do período:** {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
-                df_agrupado = df_filtrado.groupby(['Centro_Custo', 'Codigo_CC'])[coluna_valor].sum().reset_index()
+                st.markdown(f"**Rateio detalhado do período:** {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
+                
+                # Agrupa por Centro de Custo E por Tipo de Refeição
+                df_agrupado_tipo = df_filtrado.groupby(['Centro_Custo', 'Codigo_CC', 'Tipo'])[coluna_valor].sum().reset_index()
+                
+                # Transforma a tabela em uma Matriz (Tabela Dinâmica)
+                df_pivot = df_agrupado_tipo.pivot_table(index=['Centro_Custo', 'Codigo_CC'], columns='Tipo', values=coluna_valor, aggfunc='sum', fill_value=0).reset_index()
+                
+                # Soma a linha para gerar o "Total do Setor"
+                colunas_refeicoes = [col for col in df_pivot.columns if col not in ['Centro_Custo', 'Codigo_CC']]
+                df_pivot['Total_Setor'] = df_pivot[colunas_refeicoes].sum(axis=1)
                 
                 c1, c2 = st.columns([2, 1])
                 with c1:
-                    st.bar_chart(data=df_agrupado, x='Centro_Custo', y=coluna_valor, color="#2A9D8F")
+                    # Gráfico de Barras Empilhadas (mostra a composição das refeições dentro da barra do setor)
+                    df_chart = df_pivot.set_index('Centro_Custo').drop(columns=['Codigo_CC', 'Total_Setor'])
+                    st.bar_chart(df_chart)
                     
                 with c2:
-                    st.dataframe(df_agrupado, hide_index=True, use_container_width=True)
-                    csv = df_agrupado.to_csv(index=False, sep=';', decimal=',')
-                    st.download_button("📥 Exportar Rateio (.CSV)", data=csv, file_name='rateio_nutricontrol.csv', mime='text/csv', use_container_width=True)
+                    st.dataframe(df_pivot, hide_index=True, use_container_width=True)
+                    csv = df_pivot.to_csv(index=False, sep=';', decimal=',')
+                    st.download_button("📥 Exportar Rateio Matricial (.CSV)", data=csv, file_name='rateio_detalhado_nutricontrol.csv', mime='text/csv', use_container_width=True)
                     
             with tab2:
                 st.markdown("**Comparativo de Consumo Mês a Mês** (Barras Consolidadas)")
                 
-                # O formato %m/%Y (Ex: 09/2026) deixa o eixo x mais natural para nós
                 df_filtrado['Mes_Ano'] = df_filtrado['Data'].dt.strftime('%m/%Y')
-                
-                # Agrupa a soma pelo mês e ordena cronologicamente pela data original
                 df_comp = df_filtrado.groupby('Mes_Ano')[coluna_valor].sum().reset_index()
                 
                 c1, c2 = st.columns([2, 1])
                 with c1:
-                    # Trocado st.line_chart por st.bar_chart para ver o volume lado a lado
                     st.bar_chart(data=df_comp, x='Mes_Ano', y=coluna_valor, color="#1E293B")
                 
                 with c2:
@@ -275,4 +286,3 @@ elif menu == "Dashboard e Exportação":
             st.subheader("Auditoria de Lançamentos (Base Filtrada)")
             df_filtrado['Data'] = df_filtrado['Data'].dt.strftime('%d/%m/%Y')
             st.dataframe(df_filtrado.drop(columns=['Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
-            
