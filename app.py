@@ -50,7 +50,8 @@ if menu == "Lançamento Diário":
             col1, col2, col3, col4, col5 = st.columns(5)
             
             with col1:
-                data_lanc = st.date_input("Data", datetime.today())
+                # O formato BR foi adicionado aqui para quando digitar direto no campo de lançamento também
+                data_lanc = st.date_input("Data", datetime.today(), format="DD/MM/YYYY")
             with col2:
                 dict_cc = dict(zip(ccs.nome, ccs.id))
                 cc_selecionado = st.selectbox("Centro de Custo", ccs['nome'].tolist())
@@ -202,29 +203,30 @@ elif menu == "Dashboard e Exportação":
     if df.empty:
         st.info("Nenhum dado registrado para análise.")
     else:
-        # Preparação das Datas para o Filtro
         df['Data'] = pd.to_datetime(df['Data'])
         min_date = df['Data'].min().date()
         max_date = df['Data'].max().date()
         
-        # 1. ÁREA DE FILTROS AVANÇADOS
         st.markdown("### Filtros de Análise")
         col_f1, col_f2 = st.columns(2)
         
         with col_f1:
-            periodo = st.date_input("Selecione o Período (Início e Fim):", [min_date, max_date], min_value=min_date, max_value=max_date)
+            # Filtro com formato de data BR (DD/MM/YYYY)
+            periodo = st.date_input("Selecione o Período (Início e Fim):", 
+                                    [min_date, max_date], 
+                                    min_value=min_date, 
+                                    max_value=max_date,
+                                    format="DD/MM/YYYY")
             
         with col_f2:
             tipos_disponiveis = df['Tipo'].unique().tolist()
             tipos_selecionados = st.multiselect("Filtrar por Tipos de Refeição:", tipos_disponiveis, default=tipos_disponiveis)
             
-        # Trata o retorno do seletor de data (caso o usuário clique apenas no primeiro dia e não no segundo)
         if len(periodo) == 2:
             data_inicio, data_fim = periodo
         else:
             data_inicio = data_fim = periodo[0]
             
-        # Aplica os filtros na base de dados (Data e Tipo de Refeição)
         mask = (df['Data'].dt.date >= data_inicio) & (df['Data'].dt.date <= data_fim) & (df['Tipo'].isin(tipos_selecionados))
         df_filtrado = df[mask].copy()
         
@@ -233,16 +235,13 @@ elif menu == "Dashboard e Exportação":
         if df_filtrado.empty:
             st.warning("Nenhum dado encontrado para o período e refeições selecionados.")
         else:
-            # Controle de Métrica Global (Muda todos os gráficos de uma vez)
             visao = st.radio("Selecione a métrica visual para os relatórios abaixo:", ["Volume Equivalente (Base Ponderada)", "Quantidade Absoluta (Operação)"], horizontal=True)
             coluna_valor = 'Volume_Equivalente' if "Equivalente" in visao else 'Quantidade'
             
-            # 2. ABAS ANALÍTICAS (Consolidado vs Comparativo)
             tab1, tab2 = st.tabs(["📊 Visão Consolidada (Fechamento)", "📈 Comparativo Mensal (Tendência)"])
             
             with tab1:
                 st.markdown(f"**Rateio do período:** {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
-                # Agrupa por Centro de Custo
                 df_agrupado = df_filtrado.groupby(['Centro_Custo', 'Codigo_CC'])[coluna_valor].sum().reset_index()
                 
                 c1, c2 = st.columns([2, 1])
@@ -255,25 +254,25 @@ elif menu == "Dashboard e Exportação":
                     st.download_button("📥 Exportar Rateio (.CSV)", data=csv, file_name='rateio_nutricontrol.csv', mime='text/csv', use_container_width=True)
                     
             with tab2:
-                st.markdown("**Evolução de Consumo Mês a Mês** (Baseado no período filtrado acima)")
+                st.markdown("**Comparativo de Consumo Mês a Mês** (Barras Consolidadas)")
                 
-                # Cria uma coluna apenas com "Ano-Mês" para agrupar o gráfico de linhas
-                df_filtrado['Mes_Ano'] = df_filtrado['Data'].dt.strftime('%Y-%m')
+                # O formato %m/%Y (Ex: 09/2026) deixa o eixo x mais natural para nós
+                df_filtrado['Mes_Ano'] = df_filtrado['Data'].dt.strftime('%m/%Y')
+                
+                # Agrupa a soma pelo mês e ordena cronologicamente pela data original
                 df_comp = df_filtrado.groupby('Mes_Ano')[coluna_valor].sum().reset_index()
                 
                 c1, c2 = st.columns([2, 1])
                 with c1:
-                    st.line_chart(data=df_comp, x='Mes_Ano', y=coluna_valor, color="#1E293B")
+                    # Trocado st.line_chart por st.bar_chart para ver o volume lado a lado
+                    st.bar_chart(data=df_comp, x='Mes_Ano', y=coluna_valor, color="#1E293B")
                 
                 with c2:
-                    # Mostra a tabela lateral renomeando as colunas para ficar bonito
                     df_exibicao_comp = df_comp.rename(columns={'Mes_Ano': 'Mês de Referência', coluna_valor: 'Total Servido'})
                     st.dataframe(df_exibicao_comp, hide_index=True, use_container_width=True)
 
-            # 3. AUDITORIA BRUTA
             st.divider()
             st.subheader("Auditoria de Lançamentos (Base Filtrada)")
-            # Converte a data de volta para o formato BR para ficar bonito na tabela
             df_filtrado['Data'] = df_filtrado['Data'].dt.strftime('%d/%m/%Y')
             st.dataframe(df_filtrado.drop(columns=['Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
-                
+            
