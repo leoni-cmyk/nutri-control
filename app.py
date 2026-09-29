@@ -30,7 +30,7 @@ init_db()
 # MENU LATERAL E LOGO
 # ==========================================
 # Link para um ícone provisório. Você pode substituir a URL abaixo pelo link do seu logotipo real.
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3063/3063822.png", width=80)
+st.sidebar.image("IMG_20260929_143532.jpg", use_container_width=True)
 st.sidebar.title("Nutri Control")
 menu = st.sidebar.radio("Navegação", ["Lançamento Diário", "Cadastros Base", "Dashboard e Exportação"])
 
