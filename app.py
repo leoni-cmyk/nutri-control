@@ -47,7 +47,7 @@ init_db()
 # ==========================================
 # MENU LATERAL E LOGO
 # ==========================================
-st.sidebar.image("1000724841.png", use_container_width=True) 
+st.sidebar.image("Logo_NC.png", use_container_width=True) 
 st.sidebar.title("NutriControl")
 menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
 
