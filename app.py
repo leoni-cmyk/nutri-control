@@ -6,7 +6,7 @@ from datetime import datetime
 # ==========================================
 # CONFIGURAÇÃO DA PÁGINA E BANCO DE DADOS
 # ==========================================
-st.set_page_config(page_title="Nutri Control", page_icon="🍽️", layout="wide")
+st.set_page_config(page_title="NutriControl", page_icon="🍽️", layout="wide")
 
 def get_connection():
     return sqlite3.connect('nutricontrol.db', check_same_thread=False)
@@ -30,14 +30,47 @@ init_db()
 # MENU LATERAL E LOGO
 # ==========================================
 st.sidebar.image("1000724841.png", use_container_width=True)
-st.sidebar.title("Nutri Control")
-# Atualizamos o nome do módulo para englobar as duas visões
-menu = st.sidebar.radio("Navegação", ["Lançamento Diário", "Cadastros Base", "Painel Gerencial"])
+st.sidebar.title("NutriControl")
+menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Cadastros Base", "Painel Gerencial"])
 
 # ==========================================
-# MÓDULO 2: LANÇAMENTO DIÁRIO E CORREÇÕES
+# MÓDULO 0: TELA INICIAL (HOME)
 # ==========================================
-if menu == "Lançamento Diário":
+if menu == "Início":
+    st.title("Bem-vindo ao NutriControl")
+    st.markdown("Sistema de Gestão e Rateio de Custos de Nutrição Hospitalar")
+    st.divider()
+    
+    # Resumo Rápido da Operação de Hoje
+    hoje_str = datetime.today().strftime("%Y-%m-%d")
+    hoje_br = datetime.today().strftime("%d/%m/%Y")
+    
+    st.subheader(f"Visão Operacional - Hoje ({hoje_br})")
+    
+    conn = get_connection()
+    df_hoje = pd.read_sql_query("SELECT qtd, vol_eq FROM registros WHERE data = ?", conn, params=(hoje_str,))
+    conn.close()
+    
+    col1, col2, col3 = st.columns(3)
+    if df_hoje.empty:
+        col1.metric("Refeições Físicas Servidas", "0")
+        col2.metric("Volume Equivalente (Base)", "0.0")
+        col3.metric("Lançamentos Registrados", "0")
+    else:
+        total_qtd = df_hoje['qtd'].sum()
+        total_vol = df_hoje['vol_eq'].sum()
+        total_lancamentos = len(df_hoje)
+        
+        col1.metric("Refeições Físicas Servidas", f"{total_qtd:,}".replace(",", "."))
+        col2.metric("Volume Equivalente (Base)", f"{total_vol:,.1f}".replace(".", ","))
+        col3.metric("Lançamentos Registrados", f"{total_lancamentos}")
+        
+    st.info("💡 Navegue pelo menu lateral para registrar a produção diária ou extrair o fechamento gerencial.")
+
+# ==========================================
+# MÓDULO 2: LANÇAMENTO DIÁRIO E LOTE
+# ==========================================
+elif menu == "Lançamento Diário":
     st.header("Lançamento Diário de Refeições")
     
     conn = get_connection()
@@ -47,40 +80,86 @@ if menu == "Lançamento Diário":
     if ccs.empty or refeicoes.empty:
         st.warning("⚠️ Cadastre Centros de Custo e Tipos de Refeição no módulo 'Cadastros Base' antes de iniciar os lançamentos.")
     else:
-        with st.form("form_lancamento", clear_on_submit=True):
-            col1, col2, col3, col4, col5 = st.columns(5)
-            
-            with col1:
-                data_lanc = st.date_input("Data", datetime.today(), format="DD/MM/YYYY")
-            with col2:
-                dict_cc = dict(zip(ccs.nome, ccs.id))
-                cc_selecionado = st.selectbox("Centro de Custo", ccs['nome'].tolist())
-            with col3:
-                categoria = st.selectbox("Categoria", ["Paciente", "Acompanhante", "Funcionário"])
-            with col4:
-                dict_ref = dict(zip(refeicoes.nome, refeicoes.id))
-                dict_peso = dict(zip(refeicoes.id, refeicoes.peso))
-                ref_selecionada = st.selectbox("Tipo de Refeição", refeicoes['nome'].tolist())
-            with col5:
-                qtd = st.number_input("Quantidade", min_value=1, step=1)
-            
-            submit = st.form_submit_button("Registrar Produção", use_container_width=True)
-            
-            if submit:
-                id_cc = dict_cc[cc_selecionado]
-                id_ref = dict_ref[ref_selecionada]
-                peso_ref = dict_peso[id_ref]
-                vol_eq = qtd * peso_ref
+        # ABAS DE LANÇAMENTO
+        tab1, tab2 = st.tabs(["Lançamento Individual", "⚡ Lançamento em Lote (Rápido)"])
+        
+        # ABA 1: Lançamento Unitário
+        with tab1:
+            with st.form("form_lancamento", clear_on_submit=True):
+                col1, col2, col3, col4, col5 = st.columns(5)
                 
-                c = conn.cursor()
-                c.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq) VALUES (?, ?, ?, ?, ?, ?)",
-                          (data_lanc.strftime("%Y-%m-%d"), id_cc, id_ref, categoria, qtd, vol_eq))
-                conn.commit()
-                st.success(f"✅ Registrado com sucesso: {qtd}x {ref_selecionada} ({categoria}) para {cc_selecionado}.")
-                st.rerun()
+                with col1:
+                    data_lanc = st.date_input("Data", datetime.today(), format="DD/MM/YYYY")
+                with col2:
+                    dict_cc = dict(zip(ccs.nome, ccs.id))
+                    cc_selecionado = st.selectbox("Centro de Custo", ccs['nome'].tolist())
+                with col3:
+                    categoria = st.selectbox("Categoria", ["Paciente", "Acompanhante", "Funcionário"])
+                with col4:
+                    dict_ref = dict(zip(refeicoes.nome, refeicoes.id))
+                    dict_peso = dict(zip(refeicoes.id, refeicoes.peso))
+                    ref_selecionada = st.selectbox("Tipo de Refeição", refeicoes['nome'].tolist())
+                with col5:
+                    qtd = st.number_input("Quantidade", min_value=1, step=1)
+                
+                if st.form_submit_button("Registrar Produção Única", use_container_width=True):
+                    id_cc = dict_cc[cc_selecionado]
+                    id_ref = dict_ref[ref_selecionada]
+                    vol_eq = qtd * dict_peso[id_ref]
+                    
+                    conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq) VALUES (?, ?, ?, ?, ?, ?)",
+                              (data_lanc.strftime("%Y-%m-%d"), id_cc, id_ref, categoria, qtd, vol_eq))
+                    conn.commit()
+                    st.success(f"✅ Registrado: {qtd}x {ref_selecionada} ({categoria}) no {cc_selecionado}.")
+                    st.rerun()
 
+        # ABA 2: Lançamento em Lote
+        with tab2:
+            with st.form("form_lote", clear_on_submit=True):
+                st.markdown("**1. Selecione o Destino:**")
+                cL1, cL2, cL3 = st.columns(3)
+                
+                with cL1:
+                    data_lote = st.date_input("Data da Produção", datetime.today(), format="DD/MM/YYYY", key="dlote")
+                with cL2:
+                    cc_lote = st.selectbox("Centro de Custo", ccs['nome'].tolist(), key="cclote")
+                with cL3:
+                    cat_lote = st.selectbox("Categoria", ["Paciente", "Acompanhante", "Funcionário"], key="catlote")
+                
+                st.markdown("**2. Informe as Quantidades (Deixe 0 para refeições que não foram servidas):**")
+                
+                # Gera as colunas dinamicamente baseado na quantidade de refeições cadastradas
+                cols_refeicoes = st.columns(4) 
+                qtd_lote_inputs = {}
+                dict_peso = dict(zip(refeicoes.id, refeicoes.peso))
+                
+                for index, row in refeicoes.iterrows():
+                    col = cols_refeicoes[index % 4]
+                    # Salva o input de cada refeição em um dicionário usando o ID da refeição
+                    qtd_lote_inputs[row['id']] = col.number_input(row['nome'], min_value=0, step=1, key=f"ref_{row['id']}")
+                
+                if st.form_submit_button("Gravar Lote Completo", use_container_width=True):
+                    id_cc = dict_cc[cc_lote]
+                    insercoes = 0
+                    
+                    for id_ref, qt in qtd_lote_inputs.items():
+                        if qt > 0:
+                            vol_eq = qt * dict_peso[id_ref]
+                            conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq) VALUES (?, ?, ?, ?, ?, ?)",
+                                      (data_lote.strftime("%Y-%m-%d"), id_cc, id_ref, cat_lote, qt, vol_eq))
+                            insercoes += 1
+                    
+                    if insercoes > 0:
+                        conn.commit()
+                        st.success(f"✅ Lote gravado! {insercoes} tipos de refeições registrados para o {cc_lote}.")
+                        st.rerun()
+                    else:
+                        st.warning("Nenhuma quantidade maior que zero foi informada.")
+
+        # Painel de Auditoria e Correções (Fica abaixo das abas para servir a ambas)
         st.divider()
-        st.subheader(f"Lançamentos registrados para {data_lanc.strftime('%d/%m/%Y')}")
+        st.subheader("Auditoria do Dia")
+        data_auditoria = st.date_input("Escolha a data para verificar/excluir lançamentos:", datetime.today(), format="DD/MM/YYYY")
         
         df_hoje = pd.read_sql_query('''
             SELECT r.id, c.nome as Setor, t.nome as Refeicao, r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Equivalente 
@@ -88,15 +167,15 @@ if menu == "Lançamento Diário":
             JOIN centros_custo c ON r.id_cc = c.id 
             JOIN tipos_refeicao t ON r.id_refeicao = t.id 
             WHERE r.data = ?
-        ''', conn, params=(data_lanc.strftime("%Y-%m-%d"),))
+        ''', conn, params=(data_auditoria.strftime("%Y-%m-%d"),))
         
         if df_hoje.empty:
-            st.info("Nenhum lançamento registrado nesta data até o momento.")
+            st.info(f"Nenhum lançamento registrado em {data_auditoria.strftime('%d/%m/%Y')}.")
         else:
             st.dataframe(df_hoje, hide_index=True, use_container_width=True)
             apagar_reg = st.selectbox("Cometeu um erro? Selecione um lançamento para remover", 
                                       df_hoje.apply(lambda x: f"ID {x['id']} - {x['Quantidade']}x {x['Refeicao']} ({x['Categoria']}) no {x['Setor']}", axis=1).tolist())
-            if st.button("🗑️️ Excluir Lançamento Errado", key="del_reg"):
+            if st.button("🗑 Excluir Lançamento Errado", key="del_reg"):
                 id_to_delete = int(apagar_reg.split(" - ")[0].replace("ID ", ""))
                 conn.execute("DELETE FROM registros WHERE id=?", (id_to_delete,))
                 conn.commit()
@@ -124,7 +203,6 @@ elif menu == "Cadastros Base":
                 if st.form_submit_button("Salvar Setor", use_container_width=True):
                     conn = get_connection()
                     existente = conn.execute("SELECT id FROM centros_custo WHERE nome=? OR cod_erp=?", (nome_cc, cod_erp)).fetchone()
-                    
                     if existente:
                         st.error("⚠️ Erro: Já existe um Centro de Custo cadastrado com este Nome ou Código.")
                     else:
@@ -139,7 +217,6 @@ elif menu == "Cadastros Base":
             conn = get_connection()
             df_cc = pd.read_sql_query("SELECT id, nome as Setor, cod_erp as Código, classificacao as Tipo FROM centros_custo", conn)
             st.dataframe(df_cc, hide_index=True, use_container_width=True)
-            
             if not df_cc.empty:
                 apagar_cc = st.selectbox("Selecione um setor para remover", df_cc['Setor'].tolist())
                 if st.button("🗑️ Deletar Setor", key="del_cc"):
@@ -159,7 +236,6 @@ elif menu == "Cadastros Base":
                 if st.form_submit_button("Salvar Refeição", use_container_width=True):
                     conn = get_connection()
                     existente = conn.execute("SELECT id FROM tipos_refeicao WHERE nome=?", (nome_ref,)).fetchone()
-                    
                     if existente:
                         st.error("⚠️ Erro: Já existe uma refeição cadastrada com este nome.")
                     else:
@@ -174,7 +250,6 @@ elif menu == "Cadastros Base":
             conn = get_connection()
             df_ref = pd.read_sql_query("SELECT id, nome as Refeição, peso as Peso FROM tipos_refeicao", conn)
             st.dataframe(df_ref, hide_index=True, use_container_width=True)
-            
             if not df_ref.empty:
                 apagar_ref = st.selectbox("Selecione uma refeição para remover", df_ref['Refeição'].tolist())
                 if st.button("🗑 Deletar Refeição", key="del_ref"):
@@ -211,16 +286,10 @@ elif menu == "Painel Gerencial":
         col_f1, col_f2, col_f3 = st.columns(3)
         
         with col_f1:
-            periodo = st.date_input("Período (Início e Fim):", 
-                                    [min_date, max_date], 
-                                    min_value=min_date, 
-                                    max_value=max_date,
-                                    format="DD/MM/YYYY")
-            
+            periodo = st.date_input("Período (Início e Fim):", [min_date, max_date], min_value=min_date, max_value=max_date, format="DD/MM/YYYY")
         with col_f2:
             tipos_disponiveis = df['Tipo'].unique().tolist()
             tipos_selecionados = st.multiselect("Tipos de Refeição:", tipos_disponiveis, default=tipos_disponiveis)
-            
         with col_f3:
             ccs_disponiveis = df['Centro_Custo'].unique().tolist()
             ccs_selecionados = st.multiselect("Centros de Custo:", ccs_disponiveis, default=ccs_disponiveis)
@@ -246,14 +315,11 @@ elif menu == "Painel Gerencial":
             with tab1:
                 st.markdown(f"**Consolidação do período:** {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
                 
-                # GRÁFICO FOCADO NA NUTRIÇÃO (Eixo X = Refeição, Cores = Categoria)
                 st.markdown("#### Volume por Tipo de Refeição e Comensal")
                 df_chart_refeicao = df_filtrado.groupby(['Tipo', 'Categoria'])[coluna_valor].sum().reset_index()
-                # Transforma para o formato ideal do gráfico (Refeições na base, Categorias empilhadas)
                 df_chart_pivot = df_chart_refeicao.pivot(index='Tipo', columns='Categoria', values=coluna_valor).fillna(0)
                 st.bar_chart(df_chart_pivot)
                 
-                # TABELA FOCADA NA CONTROLADORIA (Linhas = Centros de Custo)
                 st.markdown("#### Base de Rateio por Centro de Custo")
                 df_agrupado_tipo = df_filtrado.groupby(['Centro_Custo', 'Codigo_CC', 'Tipo'])[coluna_valor].sum().reset_index()
                 df_pivot = df_agrupado_tipo.pivot_table(index=['Centro_Custo', 'Codigo_CC'], columns='Tipo', values=coluna_valor, aggfunc='sum', fill_value=0).reset_index()
@@ -261,21 +327,18 @@ elif menu == "Painel Gerencial":
                 colunas_refeicoes = [col for col in df_pivot.columns if col not in ['Centro_Custo', 'Codigo_CC']]
                 df_pivot['Total_Setor'] = df_pivot[colunas_refeicoes].sum(axis=1)
                 
-                # Tabela ocupando a largura total
                 st.dataframe(df_pivot, hide_index=True, use_container_width=True)
                 csv = df_pivot.to_csv(index=False, sep=';', decimal=',')
-                st.download_button("📥 Exportar Matriz de Rateio (.CSV)", data=csv, file_name='rateio_detalhado_nutricontrol.csv', mime='text/csv', use_container_width=True)
+                st.download_button("📥 Exportar Matriz de Rateio (.CSV)", data=csv, file_name='rateio_detalhado_NutriControl.csv', mime='text/csv', use_container_width=True)
                     
             with tab2:
                 st.markdown("**Comparativo de Consumo Mês a Mês** (Barras Consolidadas)")
-                
                 df_filtrado['Mes_Ano'] = df_filtrado['Data'].dt.strftime('%m/%Y')
                 df_comp = df_filtrado.groupby('Mes_Ano')[coluna_valor].sum().reset_index()
                 
                 c1, c2 = st.columns([2, 1])
                 with c1:
                     st.bar_chart(data=df_comp, x='Mes_Ano', y=coluna_valor, color="#1E293B")
-                
                 with c2:
                     df_exibicao_comp = df_comp.rename(columns={'Mes_Ano': 'Mês de Referência', coluna_valor: 'Total Servido'})
                     st.dataframe(df_exibicao_comp, hide_index=True, use_container_width=True)
