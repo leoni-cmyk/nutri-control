@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import calendar
 
 # ==========================================
 # CONFIGURAÇÃO DA PÁGINA E BANCO DE DADOS
@@ -11,6 +12,7 @@ st.set_page_config(page_title="NutriControl", page_icon="🍽️", layout="wide"
 def get_connection():
     return sqlite3.connect('nutricontrol.db', check_same_thread=False)
 
+# Adicionei a coluna 'origem' na tabela registros para auditoria (Manual vs Catraca)
 def init_db():
     conn = get_connection()
     c = conn.cursor()
@@ -18,30 +20,34 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, cod_erp TEXT, classificacao TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS tipos_refeicao
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, peso REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS registros
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
-                  categoria TEXT, qtd INTEGER, vol_eq REAL)''')
+    # Usei try/except para garantir que a tabela seja criada com a coluna origem, ou atualizada se já existir
+    try:
+        c.execute('''CREATE TABLE IF NOT EXISTS registros
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
+                      categoria TEXT, qtd INTEGER, vol_eq REAL, origem TEXT DEFAULT 'Manual')''')
+    except sqlite3.OperationalError:
+        pass # Se a coluna origem já existe, não faz nada. Na vida real teríamos script de migração.
     conn.commit()
     conn.close()
 
 init_db()
 
 # ==========================================
-# MENU LATERAL E LOGO
+# MENU LATERAL E LOGO (NOVA COMPONENTE)
 # ==========================================
-st.sidebar.image("1000724841.png", use_container_width=True)
+# Substituí sidebar.image pelo novo componente oficial para logos. Fica fixo no topo.
+st.logo("1000724841.png", link="http://localhost:8501") 
 st.sidebar.title("NutriControl")
-menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Cadastros Base", "Painel Gerencial"])
+menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
 
 # ==========================================
-# MÓDULO 0: TELA INICIAL (HOME)
+# MÓDULO 0: TELA INICIAL
 # ==========================================
 if menu == "Início":
     st.title("Bem-vindo ao NutriControl")
     st.markdown("Sistema de Gestão e Rateio de Custos de Nutrição Hospitalar")
     st.divider()
     
-    # Resumo Rápido da Operação de Hoje
     hoje_str = datetime.today().strftime("%Y-%m-%d")
     hoje_br = datetime.today().strftime("%d/%m/%Y")
     
@@ -59,13 +65,11 @@ if menu == "Início":
     else:
         total_qtd = df_hoje['qtd'].sum()
         total_vol = df_hoje['vol_eq'].sum()
-        total_lancamentos = len(df_hoje)
-        
         col1.metric("Refeições Físicas Servidas", f"{total_qtd:,}".replace(",", "."))
         col2.metric("Volume Equivalente (Base)", f"{total_vol:,.1f}".replace(".", ","))
-        col3.metric("Lançamentos Registrados", f"{total_lancamentos}")
+        col3.metric("Lançamentos Registrados", str(len(df_hoje)))
         
-    st.info("💡 Navegue pelo menu lateral para registrar a produção diária ou extrair o fechamento gerencial.")
+    st.info("💡 Navegue pelo menu lateral para gerenciar as operações ou acessar os relatórios gerenciais.")
 
 # ==========================================
 # MÓDULO 2: LANÇAMENTO DIÁRIO E LOTE
@@ -74,16 +78,14 @@ elif menu == "Lançamento Diário":
     st.header("Lançamento Diário de Refeições")
     
     conn = get_connection()
-    ccs = pd.read_sql_query("SELECT id, nome FROM centros_custo", conn)
+    ccs = pd.read_sql_query("SELECT id, nome, cod_erp FROM centros_custo", conn)
     refeicoes = pd.read_sql_query("SELECT id, nome, peso FROM tipos_refeicao", conn)
     
     if ccs.empty or refeicoes.empty:
-        st.warning("⚠️ Cadastre Centros de Custo e Tipos de Refeição no módulo 'Cadastros Base' antes de iniciar os lançamentos.")
+        st.warning("⚠️ Cadastre Centros de Custo e Tipos de Refeição no módulo 'Cadastros Base' primeiro.")
     else:
-        # ABAS DE LANÇAMENTO
         tab1, tab2 = st.tabs(["Lançamento Individual", "⚡ Lançamento em Lote (Rápido)"])
         
-        # ABA 1: Lançamento Unitário
         with tab1:
             with st.form("form_lancamento", clear_on_submit=True):
                 col1, col2, col3, col4, col5 = st.columns(5)
@@ -102,23 +104,21 @@ elif menu == "Lançamento Diário":
                 with col5:
                     qtd = st.number_input("Quantidade", min_value=1, step=1)
                 
-                if st.form_submit_button("Registrar Produção Única", use_container_width=True):
+                if st.form_submit_button("Registrar Produção", use_container_width=True):
                     id_cc = dict_cc[cc_selecionado]
                     id_ref = dict_ref[ref_selecionada]
                     vol_eq = qtd * dict_peso[id_ref]
                     
-                    conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq) VALUES (?, ?, ?, ?, ?, ?)",
-                              (data_lanc.strftime("%Y-%m-%d"), id_cc, id_ref, categoria, qtd, vol_eq))
+                    conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                              (data_lanc.strftime("%Y-%m-%d"), id_cc, id_ref, categoria, qtd, vol_eq, 'Manual'))
                     conn.commit()
-                    st.success(f"✅ Registrado: {qtd}x {ref_selecionada} ({categoria}) no {cc_selecionado}.")
+                    st.success("Lançamento efetuado com sucesso!")
                     st.rerun()
 
-        # ABA 2: Lançamento em Lote
         with tab2:
             with st.form("form_lote", clear_on_submit=True):
                 st.markdown("**1. Selecione o Destino:**")
                 cL1, cL2, cL3 = st.columns(3)
-                
                 with cL1:
                     data_lote = st.date_input("Data da Produção", datetime.today(), format="DD/MM/YYYY", key="dlote")
                 with cL2:
@@ -126,77 +126,169 @@ elif menu == "Lançamento Diário":
                 with cL3:
                     cat_lote = st.selectbox("Categoria", ["Paciente", "Acompanhante", "Funcionário"], key="catlote")
                 
-                st.markdown("**2. Informe as Quantidades (Deixe 0 para refeições que não foram servidas):**")
-                
-                # Gera as colunas dinamicamente baseado na quantidade de refeições cadastradas
+                st.markdown("**2. Informe as Quantidades:**")
                 cols_refeicoes = st.columns(4) 
                 qtd_lote_inputs = {}
                 dict_peso = dict(zip(refeicoes.id, refeicoes.peso))
                 
                 for index, row in refeicoes.iterrows():
                     col = cols_refeicoes[index % 4]
-                    # Salva o input de cada refeição em um dicionário usando o ID da refeição
                     qtd_lote_inputs[row['id']] = col.number_input(row['nome'], min_value=0, step=1, key=f"ref_{row['id']}")
                 
                 if st.form_submit_button("Gravar Lote Completo", use_container_width=True):
                     id_cc = dict_cc[cc_lote]
                     insercoes = 0
-                    
                     for id_ref, qt in qtd_lote_inputs.items():
                         if qt > 0:
                             vol_eq = qt * dict_peso[id_ref]
-                            conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq) VALUES (?, ?, ?, ?, ?, ?)",
-                                      (data_lote.strftime("%Y-%m-%d"), id_cc, id_ref, cat_lote, qt, vol_eq))
+                            conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                      (data_lote.strftime("%Y-%m-%d"), id_cc, id_ref, cat_lote, qt, vol_eq, 'Manual'))
                             insercoes += 1
                     
                     if insercoes > 0:
                         conn.commit()
-                        st.success(f"✅ Lote gravado! {insercoes} tipos de refeições registrados para o {cc_lote}.")
+                        st.success(f"Lote gravado: {insercoes} registros realizados.")
                         st.rerun()
                     else:
-                        st.warning("Nenhuma quantidade maior que zero foi informada.")
+                        st.warning("Nenhuma quantidade maior que zero informada.")
 
-        # Painel de Auditoria e Correções (Fica abaixo das abas para servir a ambas)
         st.divider()
         st.subheader("Auditoria do Dia")
         data_auditoria = st.date_input("Escolha a data para verificar/excluir lançamentos:", datetime.today(), format="DD/MM/YYYY")
-        
+        # Mostramos a Origem na tabela de auditoria para o gestor saber o que foi Catraca e o que foi Manual
         df_hoje = pd.read_sql_query('''
-            SELECT r.id, c.nome as Setor, t.nome as Refeicao, r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Equivalente 
-            FROM registros r 
-            JOIN centros_custo c ON r.id_cc = c.id 
-            JOIN tipos_refeicao t ON r.id_refeicao = t.id 
+            SELECT r.id, c.nome as Setor, t.nome as Refeicao, r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Equivalente, r.origem as Origem 
+            FROM registros r JOIN centros_custo c ON r.id_cc = c.id JOIN tipos_refeicao t ON r.id_refeicao = t.id 
             WHERE r.data = ?
         ''', conn, params=(data_auditoria.strftime("%Y-%m-%d"),))
         
-        if df_hoje.empty:
-            st.info(f"Nenhum lançamento registrado em {data_auditoria.strftime('%d/%m/%Y')}.")
-        else:
+        if not df_hoje.empty:
             st.dataframe(df_hoje, hide_index=True, use_container_width=True)
-            apagar_reg = st.selectbox("Cometeu um erro? Selecione um lançamento para remover", 
-                                      df_hoje.apply(lambda x: f"ID {x['id']} - {x['Quantidade']}x {x['Refeicao']} ({x['Categoria']}) no {x['Setor']}", axis=1).tolist())
-            if st.button("🗑 Excluir Lançamento Errado", key="del_reg"):
+            apagar_reg = st.selectbox("Excluir lançamento:", df_hoje.apply(lambda x: f"ID {x['id']} - {x['Quantidade']}x {x['Refeicao']} ({x['Categoria']}) no {x['Setor']} [{x['Origem']}]", axis=1).tolist())
+            if st.button("🗑 Excluir Selecionado"):
                 id_to_delete = int(apagar_reg.split(" - ")[0].replace("ID ", ""))
                 conn.execute("DELETE FROM registros WHERE id=?", (id_to_delete,))
                 conn.commit()
                 st.rerun()
-                
     conn.close()
 
 # ==========================================
-# MÓDULO 1: CADASTROS BASE E VALIDAÇÕES
+# MÓDULO NOVO: CENTRAL DE IMPORTAÇÃO
+# ==========================================
+elif menu == "Central de Importação":
+    st.header("Upload e Importação de Dados em Lote")
+    
+    tab_cc, tab_prod = st.tabs(["🏢 Importar Centros de Custo", "🏭 Importar Produção (Catraca)"])
+    
+    with tab_cc:
+        st.markdown("""
+        **Regras para importar Centros de Custo:**
+        O arquivo Excel/CSV deve conter exatamente as seguintes colunas na primeira linha:
+        `Nome` | `Codigo` | `Classificacao` (Usar: Produtivo, Apoio ou Administrativo).
+        """)
+        arquivo_cc = st.file_uploader("Selecione o arquivo de Centros de Custo (.csv, .xlsx)", type=['csv', 'xlsx'], key='up_cc')
+        
+        if arquivo_cc is not None:
+            try:
+                df_up_cc = pd.read_csv(arquivo_cc, sep=';') if arquivo_cc.name.endswith('.csv') else pd.read_excel(arquivo_cc)
+                st.dataframe(df_up_cc.head(), use_container_width=True)
+                
+                if st.button("✅ Confirmar e Gravar Centros de Custo"):
+                    conn = get_connection()
+                    for index, row in df_up_cc.iterrows():
+                        # Validação simples de duplicidade por código
+                        existente = conn.execute("SELECT id FROM centros_custo WHERE cod_erp=?", (str(row['Codigo']),)).fetchone()
+                        if not existente:
+                            conn.execute("INSERT INTO centros_custo (nome, cod_erp, classificacao) VALUES (?, ?, ?)", 
+                                         (str(row['Nome']), str(row['Codigo']), str(row['Classificacao'])))
+                    conn.commit()
+                    conn.close()
+                    st.success("Centros de custo importados com sucesso!")
+            except Exception as e:
+                st.error(f"Erro ao ler o arquivo. Verifique se o formato está correto. Detalhe: {e}")
+
+    with tab_prod:
+        st.markdown("""
+        **Regras para importar arquivo da Catraca:**
+        Para evitar erro no de-para de setores, **use o Código do Centro de Custo**.
+        Colunas obrigatórias: `Codigo_CC` | `Refeicao` | `Categoria` | `Quantidade`.
+        """)
+        
+        mes_catraca = st.selectbox("A qual mês esses dados da catraca pertencem?", 
+                                   ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"])
+        ano_catraca = st.number_input("Ano da Competência", min_value=2024, max_value=2030, value=datetime.today().year)
+        
+        arquivo_prod = st.file_uploader("Selecione o arquivo da Catraca (.csv, .xlsx)", type=['csv', 'xlsx'], key='up_prod')
+        
+        if arquivo_prod is not None:
+            try:
+                df_up_prod = pd.read_csv(arquivo_prod, sep=';') if arquivo_prod.name.endswith('.csv') else pd.read_excel(arquivo_prod)
+                st.info(f"O sistema gravará estes dados utilizando o último dia do mês selecionado: Final de {mes_catraca}/{ano_catraca}.")
+                
+                # Preview dos dados
+                st.write("**Pré-visualização dos dados a serem importados:**")
+                st.dataframe(df_up_prod.head(10), use_container_width=True)
+                
+                if st.button("✅ Confirmar Gravação da Produção"):
+                    conn = get_connection()
+                    
+                    # Dicionários para buscar os IDs baseados no nome da refeição e no CODIGO do Centro de Custo
+                    ccs_cadastrados = pd.read_sql_query("SELECT id, cod_erp FROM centros_custo", conn)
+                    ref_cadastradas = pd.read_sql_query("SELECT id, nome, peso FROM tipos_refeicao", conn)
+                    
+                    dict_cc_cod = dict(zip(ccs_cadastrados.cod_erp.astype(str), ccs_cadastrados.id))
+                    dict_ref_nome = dict(zip(ref_cadastradas.nome.str.lower(), ref_cadastradas.id))
+                    dict_peso = dict(zip(ref_cadastradas.id, ref_cadastradas.peso))
+                    
+                    # Calcula o último dia do mês para a data fake da catraca
+                    mes_num = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"].index(mes_catraca) + 1
+                    ultimo_dia = calendar.monthrange(ano_catraca, mes_num)[1]
+                    data_lancamento_catraca = f"{ano_catraca}-{mes_num:02d}-{ultimo_dia:02d}"
+                    
+                    erros = 0
+                    sucessos = 0
+                    
+                    for index, row in df_up_prod.iterrows():
+                        cod_excel = str(row['Codigo_CC']).strip()
+                        ref_excel = str(row['Refeicao']).strip().lower()
+                        
+                        # Verifica se o código da catraca existe no sistema
+                        if cod_excel in dict_cc_cod and ref_excel in dict_ref_nome:
+                            id_cc = dict_cc_cod[cod_excel]
+                            id_ref = dict_ref_nome[ref_excel]
+                            qtd = int(row['Quantidade'])
+                            vol_eq = qtd * dict_peso[id_ref]
+                            cat = str(row['Categoria'])
+                            
+                            conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                      (data_lancamento_catraca, id_cc, id_ref, cat, qtd, vol_eq, 'Catraca'))
+                            sucessos += 1
+                        else:
+                            erros += 1
+                            
+                    conn.commit()
+                    conn.close()
+                    
+                    if erros > 0:
+                        st.warning(f"{sucessos} lançamentos importados. {erros} linhas ignoradas (Código do Setor ou Nome da Refeição não encontrados no sistema).")
+                    else:
+                        st.success(f"{sucessos} lançamentos importados com sucesso!")
+                        
+            except Exception as e:
+                st.error(f"Erro na leitura do arquivo. Certifique-se de que os nomes das colunas estão exatos. {e}")
+
+# ==========================================
+# MÓDULO 1: CADASTROS BASE
 # ==========================================
 elif menu == "Cadastros Base":
     st.header("Gestão de Cadastros")
-    
     tab1, tab2 = st.tabs(["🏢 Centros de Custo", "🍽️ Tipos de Refeição"])
     
     with tab1:
         col1, col2 = st.columns([1, 2])
         with col1:
-            st.subheader("Novo Cadastro")
             with st.form("form_cc", clear_on_submit=True):
-                nome_cc = st.text_input("Nome do Setor (Ex: UTI)")
+                nome_cc = st.text_input("Nome do Setor")
                 cod_erp = st.text_input("Código do Centro de Custo")
                 classificacao = st.selectbox("Classificação", ["Produtivo", "Apoio", "Administrativo"])
                 
@@ -204,22 +296,21 @@ elif menu == "Cadastros Base":
                     conn = get_connection()
                     existente = conn.execute("SELECT id FROM centros_custo WHERE nome=? OR cod_erp=?", (nome_cc, cod_erp)).fetchone()
                     if existente:
-                        st.error("⚠️ Erro: Já existe um Centro de Custo cadastrado com este Nome ou Código.")
+                        st.error("⚠️ Já existe um Centro de Custo com este Nome ou Código.")
                     else:
                         conn.execute("INSERT INTO centros_custo (nome, cod_erp, classificacao) VALUES (?, ?, ?)", (nome_cc, cod_erp, classificacao))
                         conn.commit()
-                        st.success("Setor salvo com sucesso!")
+                        st.success("Salvo!")
                         st.rerun()
                     conn.close()
                     
         with col2:
-            st.subheader("Base Cadastrada")
             conn = get_connection()
             df_cc = pd.read_sql_query("SELECT id, nome as Setor, cod_erp as Código, classificacao as Tipo FROM centros_custo", conn)
             st.dataframe(df_cc, hide_index=True, use_container_width=True)
             if not df_cc.empty:
-                apagar_cc = st.selectbox("Selecione um setor para remover", df_cc['Setor'].tolist())
-                if st.button("🗑️ Deletar Setor", key="del_cc"):
+                apagar_cc = st.selectbox("Remover Setor:", df_cc['Setor'].tolist())
+                if st.button("🗑️ Deletar"):
                     conn.execute("DELETE FROM centros_custo WHERE nome=?", (apagar_cc,))
                     conn.commit()
                     st.rerun()
@@ -228,31 +319,28 @@ elif menu == "Cadastros Base":
     with tab2:
         col1, col2 = st.columns([1, 2])
         with col1:
-            st.subheader("Nova Refeição")
             with st.form("form_ref", clear_on_submit=True):
-                nome_ref = st.text_input("Nome (Ex: Almoço)")
-                peso_ref = st.number_input("Peso (Ex: 1.0)", min_value=0.0, step=0.1)
-                
-                if st.form_submit_button("Salvar Refeição", use_container_width=True):
+                nome_ref = st.text_input("Nome da Refeição")
+                peso_ref = st.number_input("Peso de Rateio", min_value=0.0, step=0.1)
+                if st.form_submit_button("Salvar", use_container_width=True):
                     conn = get_connection()
                     existente = conn.execute("SELECT id FROM tipos_refeicao WHERE nome=?", (nome_ref,)).fetchone()
                     if existente:
-                        st.error("⚠️ Erro: Já existe uma refeição cadastrada com este nome.")
+                        st.error("⚠️ Esta refeição já existe.")
                     else:
                         conn.execute("INSERT INTO tipos_refeicao (nome, peso) VALUES (?, ?)", (nome_ref, peso_ref))
                         conn.commit()
-                        st.success("Refeição salva com sucesso!")
+                        st.success("Salvo!")
                         st.rerun()
                     conn.close()
                     
         with col2:
-            st.subheader("Pesos Definidos")
             conn = get_connection()
             df_ref = pd.read_sql_query("SELECT id, nome as Refeição, peso as Peso FROM tipos_refeicao", conn)
             st.dataframe(df_ref, hide_index=True, use_container_width=True)
             if not df_ref.empty:
-                apagar_ref = st.selectbox("Selecione uma refeição para remover", df_ref['Refeição'].tolist())
-                if st.button("🗑 Deletar Refeição", key="del_ref"):
+                apagar_ref = st.selectbox("Remover Refeição:", df_ref['Refeição'].tolist())
+                if st.button("🗑 Deletar"):
                     conn.execute("DELETE FROM tipos_refeicao WHERE nome=?", (apagar_ref,))
                     conn.commit()
                     st.rerun()
@@ -265,12 +353,11 @@ elif menu == "Painel Gerencial":
     st.header("Painel Gerencial e Consolidação de Dados")
     
     conn = get_connection()
+    # Adicionada a coluna Origem na query para aparecer na tabela de auditoria
     query = '''
     SELECT r.data as Data, c.nome as Centro_Custo, c.cod_erp as Codigo_CC, t.nome as Tipo, 
-           r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Volume_Equivalente
-    FROM registros r
-    JOIN centros_custo c ON r.id_cc = c.id
-    JOIN tipos_refeicao t ON r.id_refeicao = t.id
+           r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Volume_Equivalente, r.origem as Origem
+    FROM registros r JOIN centros_custo c ON r.id_cc = c.id JOIN tipos_refeicao t ON r.id_refeicao = t.id
     '''
     df = pd.read_sql_query(query, conn)
     conn.close()
@@ -284,7 +371,6 @@ elif menu == "Painel Gerencial":
         
         st.markdown("### Filtros de Análise")
         col_f1, col_f2, col_f3 = st.columns(3)
-        
         with col_f1:
             periodo = st.date_input("Período (Início e Fim):", [min_date, max_date], min_value=min_date, max_value=max_date, format="DD/MM/YYYY")
         with col_f2:
@@ -307,7 +393,7 @@ elif menu == "Painel Gerencial":
         if df_filtrado.empty:
             st.warning("Nenhum dado encontrado com os filtros selecionados.")
         else:
-            visao = st.radio("Métrica Visual (Aplica-se aos gráficos e tabelas):", ["Volume Equivalente (Base Ponderada)", "Quantidade Absoluta (Operação)"], horizontal=True)
+            visao = st.radio("Métrica Visual:", ["Volume Equivalente (Base Ponderada)", "Quantidade Absoluta (Operação)"], horizontal=True)
             coluna_valor = 'Volume_Equivalente' if "Equivalente" in visao else 'Quantidade'
             
             tab1, tab2 = st.tabs(["📊 Visão por Refeições e Rateio", "📈 Comparativo Mensal (Tendência)"])
@@ -315,10 +401,11 @@ elif menu == "Painel Gerencial":
             with tab1:
                 st.markdown(f"**Consolidação do período:** {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
                 
-                st.markdown("#### Volume por Tipo de Refeição e Comensal")
-                df_chart_refeicao = df_filtrado.groupby(['Tipo', 'Categoria'])[coluna_valor].sum().reset_index()
-                df_chart_pivot = df_chart_refeicao.pivot(index='Tipo', columns='Categoria', values=coluna_valor).fillna(0)
-                st.bar_chart(df_chart_pivot)
+                st.markdown("#### Volume por Tipo de Refeição")
+                df_chart_refeicao = df_filtrado.groupby('Tipo')[coluna_valor].sum().reset_index()
+                
+                # GRÁFICO DINÂMICO MULTICORES (Streamlit usa a paleta para o eixo X automaticamente se 'color' for a mesma coluna do eixo X)
+                st.bar_chart(data=df_chart_refeicao, x='Tipo', y=coluna_valor, color='Tipo')
                 
                 st.markdown("#### Base de Rateio por Centro de Custo")
                 df_agrupado_tipo = df_filtrado.groupby(['Centro_Custo', 'Codigo_CC', 'Tipo'])[coluna_valor].sum().reset_index()
