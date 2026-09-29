@@ -8,7 +8,7 @@ import unicodedata
 # ==========================================
 # CONFIGURAÇÃO DA PÁGINA E BANCO DE DADOS
 # ==========================================
-st.set_page_config(page_title="NutriControl", page_icon="🍽️️", layout="wide")
+st.set_page_config(page_title="NutriControl", page_icon="🍽", layout="wide")
 
 def get_connection():
     return sqlite3.connect('nutricontrol.db', check_same_thread=False)
@@ -65,7 +65,6 @@ if menu == "Início":
     st.subheader(f"Visão Executiva do Mês Atual ({mes_atual_br})")
     
     conn = get_connection()
-    # Puxa os dados do mês unindo com o nome da refeição para montar os cards dinâmicos
     query_mes = '''
         SELECT t.nome as Refeicao, r.qtd as Quantidade, r.vol_eq as Volume 
         FROM registros r 
@@ -81,7 +80,6 @@ if menu == "Início":
         total_qtd = df_mes['Quantidade'].sum()
         total_vol = df_mes['Volume'].sum()
         
-        # Bloco de Totais Gerais
         col1, col2 = st.columns(2)
         col1.metric("Total de Refeições Físicas no Mês", f"{total_qtd:,}".replace(",", "."))
         col2.metric("Total de Volume Equivalente (Base)", f"{total_vol:,.1f}".replace(".", ","))
@@ -89,10 +87,7 @@ if menu == "Início":
         st.divider()
         st.markdown("#### Detalhamento por Tipo de Refeição (Acumulado no Mês)")
         
-        # AGRUPAMENTO DINÂMICO: Cria um card para cada refeição cadastrada que teve consumo
         df_por_refeicao = df_mes.groupby('Refeicao')['Quantidade'].sum().reset_index()
-        
-        # Divide as colunas dinamicamente (até 4 por linha)
         cols = st.columns(min(len(df_por_refeicao), 4))
         for index, row in df_por_refeicao.iterrows():
             col = cols[index % len(cols)]
@@ -102,7 +97,7 @@ if menu == "Início":
     st.info("💡 Navegue pelo menu lateral para gerenciar as operações, monitorar lotes ou extrair o rateio gerencial.")
 
 # ==========================================
-# MÓDULO 2: LANÇAMENTO DIÁRIO, LOTE E AUDITORIA DE IMPORTADOS
+# MÓDULO 2: LANÇAMENTO DIÁRIO, LOTE E AUDITORIA DE IMPORTados
 # ==========================================
 elif menu == "Lançamento Diário":
     st.header("Lançamento e Auditoria de Produção")
@@ -114,7 +109,7 @@ elif menu == "Lançamento Diário":
     if ccs.empty or refeicoes.empty:
         st.warning("⚠️ Cadastre Centros de Custo e Tipos de Refeição no módulo 'Cadastros Base' primeiro.")
     else:
-        tab1, tab2, tab3 = st.tabs(["Lançamento Individual", "⚡ Lançamento em Lote (Rápido)", "🏭 Registros Importados (Catraca)"])
+        tab1, tab2, tab3 = st.tabs(["Lançamento Individual", "⚡ Lançamento em Lote (Rápido)", "📂 Registros Importados"])
         
         with tab1:
             with st.form("form_lancamento", clear_on_submit=True):
@@ -183,24 +178,23 @@ elif menu == "Lançamento Diário":
                         st.warning("Nenhuma quantidade maior que zero informada.")
 
         with tab3:
-            st.markdown("#### Auditoria de Dados Importados da Catraca")
-            df_catraca = pd.read_sql_query('''
+            st.markdown("#### Auditoria de Dados Importados (Histórico de Lotes)")
+            df_importados = pd.read_sql_query('''
                 SELECT r.id, r.lote_id as Lote, r.data as Data_Competencia, c.nome as Setor, t.nome as Refeicao, r.categoria as Categoria, r.qtd as Quantidade 
                 FROM registros r JOIN centros_custo c ON r.id_cc = c.id JOIN tipos_refeicao t ON r.id_refeicao = t.id 
-                WHERE r.origem = 'Catraca' ORDER BY r.id DESC
+                WHERE r.origem = 'Importação' ORDER BY r.id DESC
             ''', conn)
             
-            if df_catraca.empty:
-                st.info("Nenhum dado importado via catraca até o momento.")
+            if df_importados.empty:
+                st.info("Nenhum dado importado via arquivo até o momento.")
             else:
-                # Converte para o padrão DD/MM/AAAA na exibição
-                df_catraca['Data_Competencia'] = pd.to_datetime(df_catraca['Data_Competencia']).dt.strftime('%d/%m/%Y')
-                st.dataframe(df_catraca, hide_index=True, use_container_width=True)
+                df_importados['Data_Competencia'] = pd.to_datetime(df_importados['Data_Competencia']).dt.strftime('%d/%m/%Y')
+                st.dataframe(df_importados, hide_index=True, use_container_width=True)
                 
-                apagar_cat = st.selectbox("Selecionar registro importado para remover:", df_catraca.apply(lambda x: f"ID {x['id']} - [Lote: {x['Lote']}] {x['Quantidade']}x {x['Refeicao']} no {x['Setor']}", axis=1).tolist())
+                apagar_imp = st.selectbox("Selecionar registro importado para remover:", df_importados.apply(lambda x: f"ID {x['id']} - [Lote: {x['Lote']}] {x['Quantidade']}x {x['Refeicao']} no {x['Setor']}", axis=1).tolist())
                 if st.button("🗑️ Excluir Registro Importado Selecionado"):
-                    id_cat_del = int(apagar_cat.split(" - ")[0].replace("ID ", ""))
-                    conn.execute("DELETE FROM registros WHERE id=?", (id_cat_del,))
+                    id_imp_del = int(apagar_imp.split(" - ")[0].replace("ID ", ""))
+                    conn.execute("DELETE FROM registros WHERE id=?", (id_imp_del,))
                     conn.commit()
                     st.rerun()
 
@@ -231,7 +225,7 @@ elif menu == "Lançamento Diário":
 elif menu == "Central de Importação":
     st.header("Upload e Importação de Dados em Lote")
     
-    tab_cc, tab_prod, tab_hist = st.tabs(["🏢 Importar Centros de Custo", "🏭 Importar Produção (Catraca)", "📋 Histórico de Lotes"])
+    tab_cc, tab_prod, tab_hist = st.tabs(["🏢 Importar Centros de Custo", "📥 Importar Produção (Lote Geral)", "📋 Histórico de Lotes"])
     
     with tab_cc:
         st.markdown("""
@@ -266,16 +260,16 @@ elif menu == "Central de Importação":
 
     with tab_prod:
         st.markdown("""
-        **Regras para importar arquivo da Catraca:**
+        **Regras para importar arquivo de Produção:**
         Use o **Código do Centro de Custo**.
         Colunas obrigatórias: `Codigo_CC` | `Refeicao` | `Categoria` | `Quantidade`.
         """)
         
-        mes_catraca = st.selectbox("A qual mês esses dados da catraca pertencem (Competência Contábil)?", 
+        mes_catraca = st.selectbox("A qual mês esses dados pertencem (Competência Contábil)?", 
                                    ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"])
         ano_catraca = st.number_input("Ano da Competência", min_value=2024, max_value=2030, value=datetime.today().year)
         
-        arquivo_prod = st.file_uploader("Selecione o arquivo da Catraca (.csv, .xlsx)", type=['csv', 'xlsx'], key='up_prod')
+        arquivo_prod = st.file_uploader("Selecione o arquivo de Produção (.csv, .xlsx)", type=['csv', 'xlsx'], key='up_prod')
         
         if arquivo_prod is not None:
             try:
@@ -324,7 +318,7 @@ elif menu == "Central de Importação":
                             cat = str(row['Categoria']).strip()
                             
                             conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem, lote_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                                      (data_lancamento_catraca, id_cc, id_ref, cat, qtd, vol_eq, 'Catraca', lote_id_gerado))
+                                      (data_lancamento_catraca, id_cc, id_ref, cat, qtd, vol_eq, 'Importação', lote_id_gerado))
                             sucessos += 1
                         else:
                             erros += 1
@@ -341,18 +335,17 @@ elif menu == "Central de Importação":
                 st.error(f"Erro na leitura do arquivo. Certifique-se de que os nomes das colunas estão exatos. Detalhe: {e}")
 
     with tab_hist:
-        st.markdown("#### Histórico de Lotes Importados via Catraca")
+        st.markdown("#### Histórico de Lotes Importados")
         conn = get_connection()
         df_lotes = pd.read_sql_query('''
             SELECT lote_id as Lote, data as Data_Competencia, count(*) as Total_Registros, sum(qtd) as Total_Fisico 
-            FROM registros WHERE origem = 'Catraca' GROUP BY lote_id, data ORDER BY data DESC
+            FROM registros WHERE origem = 'Importação' GROUP BY lote_id, data ORDER BY data DESC
         ''', conn)
         conn.close()
         
         if df_lotes.empty:
-            st.info("Nenhum lote de catraca importado até o momento.")
+            st.info("Nenhum lote importado até o momento.")
         else:
-            # Formata a data do histórico para DD/MM/AAAA
             df_lotes['Data_Competencia'] = pd.to_datetime(df_lotes['Data_Competencia']).dt.strftime('%d/%m/%Y')
             st.dataframe(df_lotes, hide_index=True, use_container_width=True)
             
@@ -519,6 +512,5 @@ elif menu == "Painel Gerencial":
 
             st.divider()
             st.subheader("Auditoria de Lançamentos (Base Filtrada)")
-            # Converte a data exibida na auditoria rigorosamente para DD/MM/AAAA
             df_filtrado['Data'] = pd.to_datetime(df_filtrado['Data']).dt.strftime('%d/%m/%Y')
-            st.dataframe(df_filtrado.drop(columns=['Data_Original', 'Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
+            st.dataframe(df_filtrado.drop(columns=['Data_Organic', 'Data_Original', 'Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
