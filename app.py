@@ -29,7 +29,6 @@ init_db()
 # ==========================================
 # MENU LATERAL E LOGO
 # ==========================================
-# Aqui o sistema puxará o arquivo de imagem salvo na sua pasta
 st.sidebar.image("1000724841.png", use_container_width=True)
 st.sidebar.title("Nutri Control")
 menu = st.sidebar.radio("Navegação", ["Lançamento Diário", "Cadastros Base", "Dashboard e Exportação"])
@@ -47,7 +46,6 @@ if menu == "Lançamento Diário":
     if ccs.empty or refeicoes.empty:
         st.warning("⚠️ Cadastre Centros de Custo e Tipos de Refeição no módulo 'Cadastros Base' antes de iniciar os lançamentos.")
     else:
-        # Formulário de Lançamento
         with st.form("form_lancamento", clear_on_submit=True):
             col1, col2, col3, col4, col5 = st.columns(5)
             
@@ -80,7 +78,6 @@ if menu == "Lançamento Diário":
                 st.success(f"✅ Registrado com sucesso: {qtd}x {ref_selecionada} ({categoria}) para {cc_selecionado}.")
                 st.rerun()
 
-        # Painel de Auditoria e Exclusão do Dia
         st.divider()
         st.subheader(f"Lançamentos registrados para {data_lanc.strftime('%d/%m/%Y')}")
         
@@ -96,8 +93,6 @@ if menu == "Lançamento Diário":
             st.info("Nenhum lançamento registrado nesta data até o momento.")
         else:
             st.dataframe(df_hoje, hide_index=True, use_container_width=True)
-            
-            # Mecanismo de exclusão
             apagar_reg = st.selectbox("Cometeu um erro? Selecione um lançamento para remover", 
                                       df_hoje.apply(lambda x: f"ID {x['id']} - {x['Quantidade']}x {x['Refeicao']} ({x['Categoria']}) no {x['Setor']}", axis=1).tolist())
             if st.button("🗑️ Excluir Lançamento Errado", key="del_reg"):
@@ -127,7 +122,6 @@ elif menu == "Cadastros Base":
                 
                 if st.form_submit_button("Salvar Setor", use_container_width=True):
                     conn = get_connection()
-                    # VALIDAÇÃO CONTRA DUPLICIDADE
                     existente = conn.execute("SELECT id FROM centros_custo WHERE nome=? OR cod_erp=?", (nome_cc, cod_erp)).fetchone()
                     
                     if existente:
@@ -163,7 +157,6 @@ elif menu == "Cadastros Base":
                 
                 if st.form_submit_button("Salvar Refeição", use_container_width=True):
                     conn = get_connection()
-                    # VALIDAÇÃO CONTRA DUPLICIDADE
                     existente = conn.execute("SELECT id FROM tipos_refeicao WHERE nome=?", (nome_ref,)).fetchone()
                     
                     if existente:
@@ -190,53 +183,97 @@ elif menu == "Cadastros Base":
             conn.close()
 
 # ==========================================
-# MÓDULO 3: DASHBOARD E EXPORTAÇÃO (FILTRADO POR MÊS)
+# MÓDULO 3: DASHBOARD DE BI E EXPORTAÇÃO
 # ==========================================
 elif menu == "Dashboard e Exportação":
-    st.header("Controladoria e Rateio")
+    st.header("Controladoria e Inteligência de Dados")
     
     conn = get_connection()
+    query = '''
+    SELECT r.data as Data, c.nome as Centro_Custo, c.cod_erp as Codigo_CC, t.nome as Tipo, 
+           r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Volume_Equivalente
+    FROM registros r
+    JOIN centros_custo c ON r.id_cc = c.id
+    JOIN tipos_refeicao t ON r.id_refeicao = t.id
+    '''
+    df = pd.read_sql_query(query, conn)
+    conn.close()
     
-    # Extrai os meses/anos disponíveis no banco para criar o filtro
-    meses_disponiveis = pd.read_sql_query("SELECT DISTINCT substr(data, 1, 7) as mes_ano FROM registros ORDER BY mes_ano DESC", conn)
-    
-    if meses_disponiveis.empty:
+    if df.empty:
         st.info("Nenhum dado registrado para análise.")
-        conn.close()
     else:
-        # Filtro de Competência
-        col_filtro, _ = st.columns([1, 3])
-        with col_filtro:
-            mes_selecionado = st.selectbox("Competência (Ano-Mês):", meses_disponiveis['mes_ano'].tolist())
+        # Preparação das Datas para o Filtro
+        df['Data'] = pd.to_datetime(df['Data'])
+        min_date = df['Data'].min().date()
+        max_date = df['Data'].max().date()
+        
+        # 1. ÁREA DE FILTROS AVANÇADOS
+        st.markdown("### Filtros de Análise")
+        col_f1, col_f2 = st.columns(2)
+        
+        with col_f1:
+            periodo = st.date_input("Selecione o Período (Início e Fim):", [min_date, max_date], min_value=min_date, max_value=max_date)
             
+        with col_f2:
+            tipos_disponiveis = df['Tipo'].unique().tolist()
+            tipos_selecionados = st.multiselect("Filtrar por Tipos de Refeição:", tipos_disponiveis, default=tipos_disponiveis)
+            
+        # Trata o retorno do seletor de data (caso o usuário clique apenas no primeiro dia e não no segundo)
+        if len(periodo) == 2:
+            data_inicio, data_fim = periodo
+        else:
+            data_inicio = data_fim = periodo[0]
+            
+        # Aplica os filtros na base de dados (Data e Tipo de Refeição)
+        mask = (df['Data'].dt.date >= data_inicio) & (df['Data'].dt.date <= data_fim) & (df['Tipo'].isin(tipos_selecionados))
+        df_filtrado = df[mask].copy()
+        
         st.divider()
         
-        query = '''
-        SELECT r.data as Data, c.nome as Centro_Custo, c.cod_erp as Codigo_CC, t.nome as Tipo, 
-               r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Volume_Equivalente
-        FROM registros r
-        JOIN centros_custo c ON r.id_cc = c.id
-        JOIN tipos_refeicao t ON r.id_refeicao = t.id
-        WHERE substr(r.data, 1, 7) = ?
-        '''
-        df = pd.read_sql_query(query, conn, params=(mes_selecionado,))
-        conn.close()
-        
-        visao = st.radio("Selecione a métrica visual:", ["Volume Equivalente (Base Ponderada)", "Quantidade Absoluta (Operação)"], horizontal=True)
-        coluna_valor = 'Volume_Equivalente' if "Equivalente" in visao else 'Quantidade'
-        
-        # Agrupa pelo Centro de Custo isolando o Mês
-        df_agrupado = df.groupby(['Centro_Custo', 'Codigo_CC'])[coluna_valor].sum().reset_index()
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.bar_chart(data=df_agrupado, x='Centro_Custo', y=coluna_valor, color="#2A9D8F")
+        if df_filtrado.empty:
+            st.warning("Nenhum dado encontrado para o período e refeições selecionados.")
+        else:
+            # Controle de Métrica Global (Muda todos os gráficos de uma vez)
+            visao = st.radio("Selecione a métrica visual para os relatórios abaixo:", ["Volume Equivalente (Base Ponderada)", "Quantidade Absoluta (Operação)"], horizontal=True)
+            coluna_valor = 'Volume_Equivalente' if "Equivalente" in visao else 'Quantidade'
             
-        with col2:
-            st.dataframe(df_agrupado, hide_index=True, use_container_width=True)
-            csv = df_agrupado.to_csv(index=False, sep=';', decimal=',')
-            st.download_button(f"📥 Exportar Rateio de {mes_selecionado}", data=csv, file_name=f'rateio_nutricontrol_{mes_selecionado}.csv', mime='text/csv', use_container_width=True)
-        
-        st.subheader(f"Auditoria de Lançamentos ({mes_selecionado})")
-        st.dataframe(df, hide_index=True, use_container_width=True)
-        
+            # 2. ABAS ANALÍTICAS (Consolidado vs Comparativo)
+            tab1, tab2 = st.tabs(["📊 Visão Consolidada (Fechamento)", "📈 Comparativo Mensal (Tendência)"])
+            
+            with tab1:
+                st.markdown(f"**Rateio do período:** {data_inicio.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}")
+                # Agrupa por Centro de Custo
+                df_agrupado = df_filtrado.groupby(['Centro_Custo', 'Codigo_CC'])[coluna_valor].sum().reset_index()
+                
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    st.bar_chart(data=df_agrupado, x='Centro_Custo', y=coluna_valor, color="#2A9D8F")
+                    
+                with c2:
+                    st.dataframe(df_agrupado, hide_index=True, use_container_width=True)
+                    csv = df_agrupado.to_csv(index=False, sep=';', decimal=',')
+                    st.download_button("📥 Exportar Rateio (.CSV)", data=csv, file_name='rateio_nutricontrol.csv', mime='text/csv', use_container_width=True)
+                    
+            with tab2:
+                st.markdown("**Evolução de Consumo Mês a Mês** (Baseado no período filtrado acima)")
+                
+                # Cria uma coluna apenas com "Ano-Mês" para agrupar o gráfico de linhas
+                df_filtrado['Mes_Ano'] = df_filtrado['Data'].dt.strftime('%Y-%m')
+                df_comp = df_filtrado.groupby('Mes_Ano')[coluna_valor].sum().reset_index()
+                
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    st.line_chart(data=df_comp, x='Mes_Ano', y=coluna_valor, color="#1E293B")
+                
+                with c2:
+                    # Mostra a tabela lateral renomeando as colunas para ficar bonito
+                    df_exibicao_comp = df_comp.rename(columns={'Mes_Ano': 'Mês de Referência', coluna_valor: 'Total Servido'})
+                    st.dataframe(df_exibicao_comp, hide_index=True, use_container_width=True)
+
+            # 3. AUDITORIA BRUTA
+            st.divider()
+            st.subheader("Auditoria de Lançamentos (Base Filtrada)")
+            # Converte a data de volta para o formato BR para ficar bonito na tabela
+            df_filtrado['Data'] = df_filtrado['Data'].dt.strftime('%d/%m/%Y')
+            st.dataframe(df_filtrado.drop(columns=['Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
+                
