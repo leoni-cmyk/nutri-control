@@ -172,7 +172,7 @@ elif menu == "Lançamento Diário":
     conn.close()
 
 # ==========================================
-# MÓDULO: CENTRAL DE IMPORTAÇÃO (ATUALIZADO PARA LATIN1)
+# MÓDULO: CENTRAL DE IMPORTAÇÃO (COM FORÇA DE TEXTO - DTYPE=STR)
 # ==========================================
 elif menu == "Central de Importação":
     st.header("Upload e Importação de Dados em Lote")
@@ -189,17 +189,22 @@ elif menu == "Central de Importação":
         
         if arquivo_cc is not None:
             try:
-                # ADICIONADO O ENCODING AQUI PARA LER ACENTOS DO WINDOWS NO CSV
-                df_up_cc = pd.read_csv(arquivo_cc, sep=';', encoding='latin1') if arquivo_cc.name.endswith('.csv') else pd.read_excel(arquivo_cc)
+                # O parâmetro dtype=str OBRIGA o sistema a ler 1.010 como texto, preservando o zero
+                if arquivo_cc.name.endswith('.csv'):
+                    df_up_cc = pd.read_csv(arquivo_cc, sep=';', encoding='latin1', dtype=str)
+                else:
+                    df_up_cc = pd.read_excel(arquivo_cc, dtype=str)
+                    
                 st.dataframe(df_up_cc.head(), use_container_width=True)
                 
                 if st.button("✅ Confirmar e Gravar Centros de Custo"):
                     conn = get_connection()
                     for index, row in df_up_cc.iterrows():
-                        existente = conn.execute("SELECT id FROM centros_custo WHERE cod_erp=?", (str(row['Codigo']),)).fetchone()
+                        codigo_limpo = str(row['Codigo']).strip()
+                        existente = conn.execute("SELECT id FROM centros_custo WHERE cod_erp=?", (codigo_limpo,)).fetchone()
                         if not existente:
                             conn.execute("INSERT INTO centros_custo (nome, cod_erp, classificacao) VALUES (?, ?, ?)", 
-                                         (str(row['Nome']), str(row['Codigo']), str(row['Classificacao'])))
+                                         (str(row['Nome']).strip(), codigo_limpo, str(row['Classificacao']).strip()))
                     conn.commit()
                     conn.close()
                     st.success("Centros de custo importados com sucesso!")
@@ -221,8 +226,12 @@ elif menu == "Central de Importação":
         
         if arquivo_prod is not None:
             try:
-                # ADICIONADO O ENCODING AQUI TAMBÉM
-                df_up_prod = pd.read_csv(arquivo_prod, sep=';', encoding='latin1') if arquivo_prod.name.endswith('.csv') else pd.read_excel(arquivo_prod)
+                # O parâmetro dtype=str OBRIGA o sistema a ler códigos com zero à esquerda/direita como texto
+                if arquivo_prod.name.endswith('.csv'):
+                    df_up_prod = pd.read_csv(arquivo_prod, sep=';', encoding='latin1', dtype=str)
+                else:
+                    df_up_prod = pd.read_excel(arquivo_prod, dtype=str)
+                    
                 st.info(f"O sistema gravará estes dados com a data de fechamento: Final de {mes_catraca}/{ano_catraca}.")
                 
                 st.write("**Pré-visualização dos dados a serem importados:**")
@@ -252,9 +261,10 @@ elif menu == "Central de Importação":
                         if cod_excel in dict_cc_cod and ref_excel in dict_ref_nome:
                             id_cc = dict_cc_cod[cod_excel]
                             id_ref = dict_ref_nome[ref_excel]
-                            qtd = int(row['Quantidade'])
+                            # Como forçamos tudo a ser texto na leitura, convertemos apenas a Quantidade para número na hora da matemática
+                            qtd = int(float(row['Quantidade'])) 
                             vol_eq = qtd * dict_peso[id_ref]
-                            cat = str(row['Categoria'])
+                            cat = str(row['Categoria']).strip()
                             
                             conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem) VALUES (?, ?, ?, ?, ?, ?, ?)",
                                       (data_lancamento_catraca, id_cc, id_ref, cat, qtd, vol_eq, 'Catraca'))
