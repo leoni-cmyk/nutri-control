@@ -23,11 +23,10 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
                   categoria TEXT, qtd INTEGER, vol_eq REAL)''')
     
-    # ATUALIZAÇÃO: Força a criação da coluna 'origem' nos bancos de dados antigos que já estavam salvos
     try:
         c.execute("ALTER TABLE registros ADD COLUMN origem TEXT DEFAULT 'Manual'")
     except sqlite3.OperationalError:
-        pass # Se a coluna já existir, ele segue o jogo sem dar erro
+        pass
         
     conn.commit()
     conn.close()
@@ -35,9 +34,8 @@ def init_db():
 init_db()
 
 # ==========================================
-# MENU LATERAL E LOGO (RESTAURADO)
+# MENU LATERAL E LOGO
 # ==========================================
-# Voltamos para a imagem grande na barra lateral
 st.sidebar.image("1000724841.png", use_container_width=True) 
 st.sidebar.title("NutriControl")
 menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
@@ -174,7 +172,7 @@ elif menu == "Lançamento Diário":
     conn.close()
 
 # ==========================================
-# MÓDULO NOVO: CENTRAL DE IMPORTAÇÃO
+# MÓDULO: CENTRAL DE IMPORTAÇÃO (ATUALIZADO PARA LATIN1)
 # ==========================================
 elif menu == "Central de Importação":
     st.header("Upload e Importação de Dados em Lote")
@@ -191,7 +189,8 @@ elif menu == "Central de Importação":
         
         if arquivo_cc is not None:
             try:
-                df_up_cc = pd.read_csv(arquivo_cc, sep=';') if arquivo_cc.name.endswith('.csv') else pd.read_excel(arquivo_cc)
+                # ADICIONADO O ENCODING AQUI PARA LER ACENTOS DO WINDOWS NO CSV
+                df_up_cc = pd.read_csv(arquivo_cc, sep=';', encoding='latin1') if arquivo_cc.name.endswith('.csv') else pd.read_excel(arquivo_cc)
                 st.dataframe(df_up_cc.head(), use_container_width=True)
                 
                 if st.button("✅ Confirmar e Gravar Centros de Custo"):
@@ -205,7 +204,7 @@ elif menu == "Central de Importação":
                     conn.close()
                     st.success("Centros de custo importados com sucesso!")
             except Exception as e:
-                st.error(f"Erro ao ler o arquivo. Verifique se o formato está correto. Detalhe: {e}")
+                st.error(f"Erro ao ler o arquivo. Detalhe: {e}")
 
     with tab_prod:
         st.markdown("""
@@ -222,7 +221,8 @@ elif menu == "Central de Importação":
         
         if arquivo_prod is not None:
             try:
-                df_up_prod = pd.read_csv(arquivo_prod, sep=';') if arquivo_prod.name.endswith('.csv') else pd.read_excel(arquivo_prod)
+                # ADICIONADO O ENCODING AQUI TAMBÉM
+                df_up_prod = pd.read_csv(arquivo_prod, sep=';', encoding='latin1') if arquivo_prod.name.endswith('.csv') else pd.read_excel(arquivo_prod)
                 st.info(f"O sistema gravará estes dados com a data de fechamento: Final de {mes_catraca}/{ano_catraca}.")
                 
                 st.write("**Pré-visualização dos dados a serem importados:**")
@@ -271,7 +271,7 @@ elif menu == "Central de Importação":
                         st.success(f"{sucessos} lançamentos importados com sucesso!")
                         
             except Exception as e:
-                st.error(f"Erro na leitura do arquivo. Certifique-se de que os nomes das colunas estão exatos. {e}")
+                st.error(f"Erro na leitura do arquivo. Certifique-se de que os nomes das colunas estão exatos. Detalhe: {e}")
 
 # ==========================================
 # MÓDULO 1: CADASTROS BASE
