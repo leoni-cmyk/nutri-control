@@ -30,6 +30,7 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
                   categoria TEXT, qtd INTEGER, vol_eq REAL, origem TEXT DEFAULT 'Manual', lote_id TEXT DEFAULT 'Manual')''')
     
+    # Compatibilidade com bases anteriores (migra termos antigos para 'Importação')
     try:
         c.execute("ALTER TABLE registros ADD COLUMN origem TEXT DEFAULT 'Manual'")
     except sqlite3.OperationalError:
@@ -38,8 +39,14 @@ def init_db():
         c.execute("ALTER TABLE registros ADD COLUMN lote_id TEXT DEFAULT 'Manual'")
     except sqlite3.OperationalError:
         pass
+    
+    # Padroniza registros antigos que estavam como 'Catraca' para 'Importação'
+    try:
+        c.execute("UPDATE registros SET origem = 'Importação' WHERE origem = 'Catraca'")
+        conn.commit()
+    except Exception:
+        pass
         
-    conn.commit()
     conn.close()
 
 init_db()
@@ -47,12 +54,12 @@ init_db()
 # ==========================================
 # MENU LATERAL E LOGO
 # ==========================================
-st.sidebar.image("Logo_NC.png", use_container_width=True) 
+st.sidebar.image("1000724841.png", use_container_width=True) 
 st.sidebar.title("NutriControl")
 menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
 
 # ==========================================
-# MÓDULO 0: TELA INICIAL (COM CARDS DINÂMICOS POR REFEIÇÃO)
+# MÓDULO 0: TELA INICIAL
 # ==========================================
 if menu == "Início":
     st.title("Bem-vindo ao NutriControl")
@@ -97,7 +104,7 @@ if menu == "Início":
     st.info("💡 Navegue pelo menu lateral para gerenciar as operações, monitorar lotes ou extrair o rateio gerencial.")
 
 # ==========================================
-# MÓDULO 2: LANÇAMENTO DIÁRIO, LOTE E AUDITORIA DE IMPORTados
+# MÓDULO 2: LANÇAMENTO DIÁRIO, LOTE E AUDITORIA
 # ==========================================
 elif menu == "Lançamento Diário":
     st.header("Lançamento e Auditoria de Produção")
@@ -127,7 +134,7 @@ elif menu == "Lançamento Diário":
                     dict_peso = dict(zip(refeicoes.id, refeicoes.peso))
                     ref_selecionada = st.selectbox("Tipo de Refeição", refeicoes['nome'].tolist())
                 with col5:
-                    qtd = st.number_input("Quantidade", min_value=1, step=1)
+                    qtd = st.number_input("Quantidade", min_value=1, step=1, help="Insira o valor e clique em Gravar abaixo")
                 
                 if st.form_submit_button("Registrar Produção", use_container_width=True):
                     id_cc = dict_cc[cc_selecionado]
@@ -151,7 +158,7 @@ elif menu == "Lançamento Diário":
                 with cL3:
                     cat_lote = st.selectbox("Categoria", ["Paciente", "Acompanhante", "Funcionário"], key="catlote")
                 
-                st.markdown("**2. Informe as Quantidades:**")
+                st.markdown("**2. Informe as Quantidades:** *(Preencha os campos e clique no botão ao final)*")
                 cols_refeicoes = st.columns(4) 
                 qtd_lote_inputs = {}
                 dict_peso = dict(zip(refeicoes.id, refeicoes.peso))
@@ -265,9 +272,9 @@ elif menu == "Central de Importação":
         Colunas obrigatórias: `Codigo_CC` | `Refeicao` | `Categoria` | `Quantidade`.
         """)
         
-        mes_catraca = st.selectbox("A qual mês esses dados pertencem (Competência Contábil)?", 
-                                   ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"])
-        ano_catraca = st.number_input("Ano da Competência", min_value=2024, max_value=2030, value=datetime.today().year)
+        mes_prod = st.selectbox("A qual mês esses dados pertencem (Competência Contábil)?", 
+                                ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"])
+        ano_prod = st.number_input("Ano da Competência", min_value=2024, max_value=2030, value=datetime.today().year)
         
         arquivo_prod = st.file_uploader("Selecione o arquivo de Produção (.csv, .xlsx)", type=['csv', 'xlsx'], key='up_prod')
         
@@ -278,7 +285,7 @@ elif menu == "Central de Importação":
                 else:
                     df_up_prod = pd.read_excel(arquivo_prod, dtype=str)
                     
-                st.info(f"Nota: Os dados serão gravados na competência de fechamento de {mes_catraca}/{ano_catraca}.")
+                st.info(f"Nota: Os dados serão gravados na competência de fechamento de {mes_prod}/{ano_prod}.")
                 st.write("**Pré-visualização dos dados a serem importados:**")
                 st.dataframe(df_up_prod.head(20), use_container_width=True)
                 
@@ -297,9 +304,9 @@ elif menu == "Central de Importação":
                         dict_ref_normalizado[nome_norm] = r['id']
                         dict_peso[r['id']] = r['peso']
                     
-                    mes_num = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"].index(mes_catraca) + 1
-                    ultimo_dia = calendar.monthrange(ano_catraca, mes_num)[1]
-                    data_lancamento_catraca = f"{ano_catraca}-{mes_num:02d}-{ultimo_dia:02d}"
+                    mes_num = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"].index(mes_prod) + 1
+                    ultimo_dia = calendar.monthrange(ano_prod, mes_num)[1]
+                    data_lancamento_prod = f"{ano_prod}-{mes_num:02d}-{ultimo_dia:02d}"
                     
                     lote_id_gerado = f"LOTE_{datetime.today().strftime('%d%m%Y_%H%M%S')}"
                     
@@ -318,7 +325,7 @@ elif menu == "Central de Importação":
                             cat = str(row['Categoria']).strip()
                             
                             conn.execute("INSERT INTO registros (data, id_cc, id_refeicao, categoria, qtd, vol_eq, origem, lote_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                                      (data_lancamento_catraca, id_cc, id_ref, cat, qtd, vol_eq, 'Importação', lote_id_gerado))
+                                      (data_lancamento_prod, id_cc, id_ref, cat, qtd, vol_eq, 'Importação', lote_id_gerado))
                             sucessos += 1
                         else:
                             erros += 1
@@ -352,7 +359,7 @@ elif menu == "Central de Importação":
             lotes_disponiveis = df_lotes['Lote'].tolist()
             lote_para_excluir = st.selectbox("Selecione um lote para exclusão completa (caso tenha subido errado):", lotes_disponiveis)
             
-            if st.button("🗑️ Excluir Lote Inteiro"):
+            if st.button("🗑️️ Excluir Lote Inteiro"):
                 conn = get_connection()
                 conn.execute("DELETE FROM registros WHERE lote_id = ?", (lote_para_excluir,))
                 conn.commit()
@@ -513,4 +520,4 @@ elif menu == "Painel Gerencial":
             st.divider()
             st.subheader("Auditoria de Lançamentos (Base Filtrada)")
             df_filtrado['Data'] = pd.to_datetime(df_filtrado['Data']).dt.strftime('%d/%m/%Y')
-            st.dataframe(df_filtrado.drop(columns=['Data_Organic', 'Data_Original', 'Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
+            st.dataframe(df_filtrado.drop(columns=['Data_Original', 'Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
