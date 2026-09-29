@@ -8,13 +8,12 @@ import unicodedata
 # ==========================================
 # CONFIGURAÇÃO DA PÁGINA E BANCO DE DADOS
 # ==========================================
-st.set_page_config(page_title="NutriControl", page_icon="🍽️", layout="wide")
+st.set_page_config(page_title="NutriControl", page_icon="🍽️️", layout="wide")
 
 def get_connection():
     return sqlite3.connect('nutricontrol.db', check_same_thread=False)
 
 def normalizar_texto(texto):
-    """Remove acentos e padroniza para minúsculas para evitar erros de match (ex: Almoço vs Almoco)"""
     if not isinstance(texto, str):
         return ""
     nfkd = unicodedata.normalize('NFKD', texto)
@@ -48,12 +47,12 @@ init_db()
 # ==========================================
 # MENU LATERAL E LOGO
 # ==========================================
-st.sidebar.image("Logo_NC.png", use_container_width=True) 
+st.sidebar.image("1000724841.png", use_container_width=True) 
 st.sidebar.title("NutriControl")
 menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
 
 # ==========================================
-# MÓDULO 0: TELA INICIAL (DINÂMICA POR MÊS)
+# MÓDULO 0: TELA INICIAL (COM CARDS DINÂMICOS POR REFEIÇÃO)
 # ==========================================
 if menu == "Início":
     st.title("Bem-vindo ao NutriControl")
@@ -66,24 +65,39 @@ if menu == "Início":
     st.subheader(f"Visão Executiva do Mês Atual ({mes_atual_br})")
     
     conn = get_connection()
-    df_mes = pd.read_sql_query("SELECT qtd, vol_eq FROM registros WHERE substr(data, 1, 7) = ?", conn, params=(mes_atual_str,))
+    # Puxa os dados do mês unindo com o nome da refeição para montar os cards dinâmicos
+    query_mes = '''
+        SELECT t.nome as Refeicao, r.qtd as Quantidade, r.vol_eq as Volume 
+        FROM registros r 
+        JOIN tipos_refeicao t ON r.id_refeicao = t.id 
+        WHERE substr(r.data, 1, 7) = ?
+    '''
+    df_mes = pd.read_sql_query(query_mes, conn, params=(mes_atual_str,))
     conn.close()
     
-    col1, col2, col3 = st.columns(3)
     if df_mes.empty:
-        col1.metric("Refeições Físicas no Mês", "0")
-        col2.metric("Volume Equivalente (Mês)", "0.0")
-        col3.metric("Total de Registros", "0")
         st.info("💡 Nenhum dado registrado para este mês ainda. Utilize o menu lateral para iniciar os lançamentos ou importar arquivos.")
     else:
-        total_qtd = df_mes['qtd'].sum()
-        total_vol = df_mes['vol_eq'].sum()
-        total_lancamentos = len(df_mes)
+        total_qtd = df_mes['Quantidade'].sum()
+        total_vol = df_mes['Volume'].sum()
         
-        col1.metric("Refeições Físicas no Mês", f"{total_qtd:,}".replace(",", "."))
-        col2.metric("Volume Equivalente (Mês)", f"{total_vol:,.1f}".replace(".", ","))
-        col3.metric("Total de Registros", f"{total_lancamentos}")
+        # Bloco de Totais Gerais
+        col1, col2 = st.columns(2)
+        col1.metric("Total de Refeições Físicas no Mês", f"{total_qtd:,}".replace(",", "."))
+        col2.metric("Total de Volume Equivalente (Base)", f"{total_vol:,.1f}".replace(".", ","))
         
+        st.divider()
+        st.markdown("#### Detalhamento por Tipo de Refeição (Acumulado no Mês)")
+        
+        # AGRUPAMENTO DINÂMICO: Cria um card para cada refeição cadastrada que teve consumo
+        df_por_refeicao = df_mes.groupby('Refeicao')['Quantidade'].sum().reset_index()
+        
+        # Divide as colunas dinamicamente (até 4 por linha)
+        cols = st.columns(min(len(df_por_refeicao), 4))
+        for index, row in df_por_refeicao.iterrows():
+            col = cols[index % len(cols)]
+            col.metric(f"Refeição: {row['Refeicao']}", f"{row['Quantidade']:,}".replace(",", "."))
+            
     st.divider()
     st.info("💡 Navegue pelo menu lateral para gerenciar as operações, monitorar lotes ou extrair o rateio gerencial.")
 
@@ -179,7 +193,10 @@ elif menu == "Lançamento Diário":
             if df_catraca.empty:
                 st.info("Nenhum dado importado via catraca até o momento.")
             else:
+                # Converte para o padrão DD/MM/AAAA na exibição
+                df_catraca['Data_Competencia'] = pd.to_datetime(df_catraca['Data_Competencia']).dt.strftime('%d/%m/%Y')
                 st.dataframe(df_catraca, hide_index=True, use_container_width=True)
+                
                 apagar_cat = st.selectbox("Selecionar registro importado para remover:", df_catraca.apply(lambda x: f"ID {x['id']} - [Lote: {x['Lote']}] {x['Quantidade']}x {x['Refeicao']} no {x['Setor']}", axis=1).tolist())
                 if st.button("🗑️ Excluir Registro Importado Selecionado"):
                     id_cat_del = int(apagar_cat.split(" - ")[0].replace("ID ", ""))
@@ -209,7 +226,7 @@ elif menu == "Lançamento Diário":
     conn.close()
 
 # ==========================================
-# MÓDULO: CENTRAL DE IMPORTAÇÃO (MOTOR FLEXÍVEL)
+# MÓDULO: CENTRAL DE IMPORTAÇÃO
 # ==========================================
 elif menu == "Central de Importação":
     st.header("Upload e Importação de Dados em Lote")
@@ -227,7 +244,6 @@ elif menu == "Central de Importação":
         if arquivo_cc is not None:
             try:
                 if arquivo_cc.name.endswith('.csv'):
-                    # sep=None + engine='python' detecta automaticamente se usou vírgula, ponto e vírgula ou TAB
                     df_up_cc = pd.read_csv(arquivo_cc, sep=None, engine='python', encoding='latin1', dtype=str)
                 else:
                     df_up_cc = pd.read_excel(arquivo_cc, dtype=str)
@@ -255,7 +271,7 @@ elif menu == "Central de Importação":
         Colunas obrigatórias: `Codigo_CC` | `Refeicao` | `Categoria` | `Quantidade`.
         """)
         
-        mes_catraca = st.selectbox("A qual mês esses dados da catraca pertencem?", 
+        mes_catraca = st.selectbox("A qual mês esses dados da catraca pertencem (Competência Contábil)?", 
                                    ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"])
         ano_catraca = st.number_input("Ano da Competência", min_value=2024, max_value=2030, value=datetime.today().year)
         
@@ -268,7 +284,7 @@ elif menu == "Central de Importação":
                 else:
                     df_up_prod = pd.read_excel(arquivo_prod, dtype=str)
                     
-                st.info(f"O sistema gravará estes dados com a data de fechamento: Final de {mes_catraca}/{ano_catraca}.")
+                st.info(f"Nota: Os dados serão gravados na competência de fechamento de {mes_catraca}/{ano_catraca}.")
                 st.write("**Pré-visualização dos dados a serem importados:**")
                 st.dataframe(df_up_prod.head(20), use_container_width=True)
                 
@@ -336,7 +352,10 @@ elif menu == "Central de Importação":
         if df_lotes.empty:
             st.info("Nenhum lote de catraca importado até o momento.")
         else:
+            # Formata a data do histórico para DD/MM/AAAA
+            df_lotes['Data_Competencia'] = pd.to_datetime(df_lotes['Data_Competencia']).dt.strftime('%d/%m/%Y')
             st.dataframe(df_lotes, hide_index=True, use_container_width=True)
+            
             lotes_disponiveis = df_lotes['Lote'].tolist()
             lote_para_excluir = st.selectbox("Selecione um lote para exclusão completa (caso tenha subido errado):", lotes_disponiveis)
             
@@ -435,9 +454,9 @@ elif menu == "Painel Gerencial":
     if df.empty:
         st.info("Nenhum dado registrado para análise.")
     else:
-        df['Data'] = pd.to_datetime(df['Data'])
-        min_date = df['Data'].min().date()
-        max_date = df['Data'].max().date()
+        df['Data_Original'] = pd.to_datetime(df['Data'])
+        min_date = df['Data_Original'].min().date()
+        max_date = df['Data_Original'].max().date()
         
         st.markdown("### Filtros de Análise")
         col_f1, col_f2, col_f3 = st.columns(3)
@@ -455,7 +474,7 @@ elif menu == "Painel Gerencial":
         else:
             data_inicio = data_fim = periodo[0]
             
-        mask = (df['Data'].dt.date >= data_inicio) & (df['Data'].dt.date <= data_fim) & (df['Tipo'].isin(tipos_selecionados)) & (df['Centro_Custo'].isin(ccs_selecionados))
+        mask = (df['Data_Original'].dt.date >= data_inicio) & (df['Data_Original'].dt.date <= data_fim) & (df['Tipo'].isin(tipos_selecionados)) & (df['Centro_Custo'].isin(ccs_selecionados))
         df_filtrado = df[mask].copy()
         
         st.divider()
@@ -488,7 +507,7 @@ elif menu == "Painel Gerencial":
                     
             with tab2:
                 st.markdown("**Comparativo de Consumo Mês a Mês** (Barras Consolidadas)")
-                df_filtrado['Mes_Ano'] = df_filtrado['Data'].dt.strftime('%m/%Y')
+                df_filtrado['Mes_Ano'] = df_filtrado['Data_Original'].dt.strftime('%m/%Y')
                 df_comp = df_filtrado.groupby('Mes_Ano')[coluna_valor].sum().reset_index()
                 
                 c1, c2 = st.columns([2, 1])
@@ -500,5 +519,6 @@ elif menu == "Painel Gerencial":
 
             st.divider()
             st.subheader("Auditoria de Lançamentos (Base Filtrada)")
-            df_filtrado['Data'] = df_filtrado['Data'].dt.strftime('%d/%m/%Y')
-            st.dataframe(df_filtrado.drop(columns=['Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
+            # Converte a data exibida na auditoria rigorosamente para DD/MM/AAAA
+            df_filtrado['Data'] = pd.to_datetime(df_filtrado['Data']).dt.strftime('%d/%m/%Y')
+            st.dataframe(df_filtrado.drop(columns=['Data_Original', 'Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
