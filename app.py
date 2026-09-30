@@ -10,21 +10,12 @@ import unicodedata
 # ==========================================
 st.set_page_config(page_title="NutriControl", page_icon="🍽", layout="wide")
 
-# Estilo limpo + CORREÇÃO DEFINITIVA DO CALENDÁRIO (Forçando contraste)
+# Estilo corrigido: Esconde apenas os elementos do Streamlit sem afetar o calendário!
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden !important;}
     [data-testid="stHeader"] {display: none;}
-    
-    /* Garante que textos, meses, anos e setas do calendário fiquem sempre pretos e visíveis */
-    div[data-baseweb="calendar"], div[data-baseweb="calendar"] * {
-        color: #000000 !important;
-    }
-    div[data-baseweb="calendar"] svg {
-        fill: #000000 !important;
-    }
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
