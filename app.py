@@ -10,6 +10,17 @@ import unicodedata
 # ==========================================
 st.set_page_config(page_title="NutriControl", page_icon="🍽", layout="wide")
 
+# Estilo para manter o visual limpo sem os menus do Streamlit, preservando a barra lateral
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden !important;}
+    [data-testid="stHeader"] {display: none;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
 def get_connection():
     return sqlite3.connect('nutricontrol.db', check_same_thread=False)
 
@@ -29,6 +40,10 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS registros
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
                   categoria TEXT, qtd INTEGER, vol_eq REAL, origem TEXT DEFAULT 'Manual', lote_id TEXT DEFAULT 'Manual')''')
+    
+    # Nova tabela para armazenar o Custo Total do Setor de Nutrição por Mês (Competência YYYY-MM)
+    c.execute('''CREATE TABLE IF NOT EXISTS custos_mensais
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, mes_ano TEXT UNIQUE, custo_total REAL)''')
     
     try:
         c.execute("ALTER TABLE registros ADD COLUMN origem TEXT DEFAULT 'Manual'")
@@ -54,7 +69,14 @@ init_db()
 # ==========================================
 st.sidebar.image("Logo_NC.png", use_container_width=True) 
 st.sidebar.title("NutriControl")
-menu = st.sidebar.radio("Navegação", ["Início", "Lançamento Diário", "Central de Importação", "Cadastros Base", "Painel Gerencial"])
+menu = st.sidebar.radio("Navegação", [
+    "Início", 
+    "Lançamento Diário", 
+    "Central de Importação", 
+    "Cadastros Base", 
+    "Gestão de Custos", 
+    "Painel Gerencial"
+])
 
 # ==========================================
 # MÓDULO 0: TELA INICIAL
@@ -243,7 +265,6 @@ elif menu == "Central de Importação":
         if arquivo_cc is not None:
             try:
                 if arquivo_cc.name.endswith('.csv'):
-                    # O sep=None com engine='python' detecta automaticamente se o arquivo usa vírgula, ponto e vírgula ou TAB
                     df_up_cc = pd.read_csv(arquivo_cc, sep=None, engine='python', encoding='latin1', dtype=str)
                 else:
                     df_up_cc = pd.read_excel(arquivo_cc, dtype=str)
@@ -437,6 +458,141 @@ elif menu == "Cadastros Base":
                     conn.commit()
                     st.rerun()
             conn.close()
+
+# ==========================================
+# MÓDULO NOVO: GESTÃO DE CUSTOS E VALORAÇÃO
+# ==========================================
+elif menu == "Gestão de Custos":
+    st.header("Gestão de Custos e Valoração por Ponderação")
+    st.markdown("Informe o custo total do setor de nutrição por mês para calcular o custo unitário e o valor alocado de cada refeição.")
+    
+    tab_lanc_custo, tab_rel_custo = st.tabs(["💰 Lançar Custo do Mês", "📊 Matriz de Custo Unitário e Rateio"])
+    
+    with tab_lanc_custo:
+        col_c1, col_c2, col_c3 = st.columns(3)
+        with col_c1:
+            mes_custo = st.selectbox("Mês de Competência", 
+                                     ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], key="mcusto")
+        with col_c2:
+            ano_custo = st.number_input("Ano", min_value=2024, max_value=2030, value=datetime.today().year, key="acusto")
+        with col_c3:
+            mes_num_c = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"].index(mes_custo) + 1
+            competencia_str = f"{ano_custo}-{mes_num_c:02d}"
+            
+            conn = get_connection()
+            res_atual = conn.execute("SELECT custo_total FROM custos_mensais WHERE mes_ano=?", (competencia_str,)).fetchone()
+            val_atual = res_atual[0] if res_atual else 0.0
+            conn.close()
+            
+            custo_informado = st.number_input("Custo Total do Setor (R$)", min_value=0.0, value=float(val_atual), step=1000.0, format="%.2f")
+            
+        if st.button("💾 Salvar Custo do Mês", use_container_width=True):
+            conn = get_connection()
+            conn.execute("INSERT OR REPLACE INTO custos_mensais (mes_ano, custo_total) VALUES (?, ?)", (competencia_str, custo_informado))
+            conn.commit()
+            conn.close()
+            st.success(f"Custo total de {mes_custo}/{ano_custo} (R$ {custo_informado:,.2f}) salvo com sucesso!".replace(",", "X").replace(".", ",").replace("X", "."))
+            st.rerun()
+            
+        st.divider()
+        st.markdown("#### Histórico de Custos Totais Lançados")
+        conn = get_connection()
+        df_hist_custos = pd.read_sql_query("SELECT mes_ano as Competencia, custo_total as Custo_Total FROM custos_mensais ORDER BY mes_ano DESC", conn)
+        conn.close()
+        if df_hist_custos.empty:
+            st.info("Nenhum custo total cadastrado até o momento.")
+        else:
+            df_hist_custos['Custo_Total'] = df_hist_custos['Custo_Total'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            st.dataframe(df_hist_custos, hide_index=True, use_container_width=True)
+
+    with tab_rel_custo:
+        st.markdown("#### Análise de Valoração e Custo Unitário")
+        
+        modo_visao = st.radio("Selecione a Visão:", ["Mês Específico", "Acumulado do Período"], horizontal=True)
+        
+        conn = get_connection()
+        if modo_visao == "Mês Específico":
+            col_v1, col_v2 = st.columns(2)
+            with col_v1:
+                mes_rel = st.selectbox("Mês", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], key="mrel")
+            with col_v2:
+                ano_rel = st.number_input("Ano", min_value=2024, max_value=2030, value=datetime.today().year, key="arel")
+            
+            m_num = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"].index(mes_rel) + 1
+            comp_filtro = f"{ano_rel}-{m_num:02d}"
+            
+            # Buscar custo do mês
+            res_c = conn.execute("SELECT custo_total FROM custos_mensais WHERE mes_ano=?", (comp_filtro,)).fetchone()
+            custo_total_periodo = res_c[0] if res_c else 0.0
+            
+            # Buscar registros do mês
+            query_dados = '''
+                SELECT t.nome as Refeicao, t.peso as Peso, r.qtd as Quantidade, r.vol_eq as Volume
+                FROM registros r JOIN tipos_refeicao t ON r.id_refeicao = t.id
+                WHERE substr(r.data, 1, 7) = ?
+            '''
+            df_val = pd.read_sql_query(query_dados, conn, params=(comp_filtro,))
+            
+        else:
+            # Acumulado de todos os registros
+            query_dados = '''
+                SELECT t.nome as Refeicao, t.peso as Peso, r.qtd as Quantidade, r.vol_eq as Volume
+                FROM registros r JOIN tipos_refeicao t ON r.id_refeicao = t.id
+            '''
+            df_val = pd.read_sql_query(query_dados, conn)
+            
+            # Somar todos os custos cadastrados
+            res_c = conn.execute("SELECT sum(custo_total) FROM custos_mensais").fetchone()
+            custo_total_periodo = res_c[0] if res_c and res_c[0] else 0.0
+            
+        conn.close()
+        
+        st.metric("Custo Total Informado para o Período", f"R$ {custo_total_periodo:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        
+        if df_val.empty:
+            st.warning("⚠️ Nenhum registro de produção encontrado para este período.")
+        else:
+            # Agrupar por tipo de refeição
+            df_resumo = df_val.groupby(['Refeicao', 'Peso']).agg({'Quantidade': 'sum', 'Volume': 'sum'}).reset_index()
+            
+            total_vol_geral = df_resumo['Volume'].sum()
+            
+            if total_vol_geral > 0:
+                # Custo por ponto de equivalência
+                custo_por_ponto = custo_total_periodo / total_vol_geral
+            else:
+                custo_por_ponto = 0.0
+                
+            # Cálculos de ponderação
+            df_resumo['Part_%'] = (df_resumo['Volume'] / total_vol_geral * 100) if total_vol_geral > 0 else 0.0
+            # Custo unitário da refeição = Peso * Custo por Ponto
+            df_resumo['Custo_Unitario'] = df_resumo['Peso'] * custo_por_ponto
+            # Custo Total Alocado = Quantidade * Custo Unitário
+            df_resumo['Custo_Total_Alocado'] = df_resumo['Quantidade'] * df_resumo['Custo_Unitario']
+            
+            # Renomear colunas para exibição amigável
+            df_exibicao = pd.DataFrame({
+                'Tipo de Refeição': df_resumo['Refeicao'],
+                'Peso': df_resumo['Peso'],
+                'Total de Refeições': df_resumo['Quantidade'],
+                'Volume Equivalente': df_resumo['Volume'],
+                '% Part. Volume': df_resumo['Part_%'].apply(lambda x: f"{x:.2f}%".replace(".", ",")),
+                'Custo Unitário (R$)': df_resumo['Custo_Unitario'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
+                'Custo Total Alocado (R$)': df_resumo['Custo_Total_Alocado'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            })
+            
+            st.divider()
+            st.dataframe(df_exibicao, hide_index=True, use_container_width=True)
+            
+            # Totais gerais
+            tot_fisico = df_resumo['Quantidade'].sum()
+            tot_vol = df_resumo['Volume'].sum()
+            tot_alocado = df_resumo['Custo_Total_Alocado'].sum()
+            
+            col_t1, col_t2, col_t3 = st.columns(3)
+            col_t1.metric("Total Refeições Físicas", f"{tot_fisico:,}".replace(",", "."))
+            col_t2.metric("Total Volume Equivalente", f"{tot_vol:,.2f}".replace(".", ","))
+            col_t3.metric("Custo Total Alocado", f"R$ {tot_alocado:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
 # ==========================================
 # MÓDULO 3: PAINEL GERENCIAL E EXPORTAÇÃO
