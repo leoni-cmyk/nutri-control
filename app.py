@@ -10,7 +10,7 @@ import unicodedata
 # ==========================================
 st.set_page_config(page_title="NutriControl", page_icon="🍽", layout="wide")
 
-# Estilo para manter o visual limpo sem os menus do Streamlit, preservando a barra lateral
+# Estilo para manter o visual limpo, preservando a barra lateral e o botão de menu mobile
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
@@ -40,8 +40,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS registros
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT, id_cc INTEGER, id_refeicao INTEGER, 
                   categoria TEXT, qtd INTEGER, vol_eq REAL, origem TEXT DEFAULT 'Manual', lote_id TEXT DEFAULT 'Manual')''')
-    
-    # Nova tabela para armazenar o Custo Total do Setor de Nutrição por Mês (Competência YYYY-MM)
     c.execute('''CREATE TABLE IF NOT EXISTS custos_mensais
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, mes_ano TEXT UNIQUE, custo_total REAL)''')
     
@@ -109,7 +107,7 @@ if menu == "Início":
         
         col1, col2 = st.columns(2)
         col1.metric("Total de Refeições Físicas no Mês", f"{total_qtd:,}".replace(",", "."))
-        col2.metric("Total de Volume Equivalente (Base)", f"{total_vol:,.1f}".replace(".", ","))
+        col2.metric("Total de Volume Equivalente (Base)", f"{total_vol:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         
         st.divider()
         st.markdown("#### Detalhamento por Tipo de Refeição (Acumulado no Mês)")
@@ -143,7 +141,7 @@ elif menu == "Lançamento Diário":
                 col1, col2, col3, col4, col5 = st.columns(5)
                 
                 with col1:
-                    data_lanc = st.date_input("Data", datetime.today(), format="DD/MM/YYYY")
+                    data_lanc = st.date_input("Data da Produção", datetime.today(), format="DD/MM/YYYY")
                 with col2:
                     dict_cc = dict(zip(ccs.nome, ccs.id))
                     cc_selecionado = st.selectbox("Centro de Custo", ccs['nome'].tolist())
@@ -227,7 +225,7 @@ elif menu == "Lançamento Diário":
 
         st.divider()
         st.subheader("Auditoria de Lançamentos Manuais do Dia")
-        data_auditoria = st.date_input("Escolha a data para verificar/excluir lançamentos manuais:", datetime.today(), format="DD/MM/YYYY")
+        data_auditoria = st.date_input("Escolha a data para verificar/excluir lançamentos manuais:", datetime.today(), format="DD/MM/YYYY", key="daud")
         df_hoje = pd.read_sql_query('''
             SELECT r.id, c.nome as Setor, t.nome as Refeicao, r.categoria as Categoria, r.qtd as Quantidade, r.vol_eq as Equivalente 
             FROM registros r JOIN centros_custo c ON r.id_cc = c.id JOIN tipos_refeicao t ON r.id_refeicao = t.id 
@@ -409,7 +407,7 @@ elif menu == "Cadastros Base":
                     conn = get_connection()
                     existente = conn.execute("SELECT id FROM centros_custo WHERE nome=? OR cod_erp=?", (nome_cc, cod_erp)).fetchone()
                     if existente:
-                        st.error("⚠️ Já existe um Centro de Custo com este Nome ou Código.")
+                        st.error("⚠️️ Já existe um Centro de Custo com este Nome ou Código.")
                     else:
                         conn.execute("INSERT INTO centros_custo (nome, cod_erp, classificacao) VALUES (?, ?, ?)", (nome_cc, cod_erp, classificacao))
                         conn.commit()
@@ -460,7 +458,7 @@ elif menu == "Cadastros Base":
             conn.close()
 
 # ==========================================
-# MÓDULO NOVO: GESTÃO DE CUSTOS E VALORAÇÃO
+# MÓDULO: GESTÃO DE CUSTOS E VALORAÇÃO
 # ==========================================
 elif menu == "Gestão de Custos":
     st.header("Gestão de Custos e Valoração por Ponderação")
@@ -508,24 +506,24 @@ elif menu == "Gestão de Custos":
     with tab_rel_custo:
         st.markdown("#### Análise de Valoração e Custo Unitário")
         
-        modo_visao = st.radio("Selecione a Visão:", ["Mês Específico", "Acumulado do Período"], horizontal=True)
+        modo_visao = st.radio("Selecione a Visão:", ["Mês Específico", "Acumulado por Período Personalizado"], horizontal=True)
         
         conn = get_connection()
+        meses_lista = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+        
         if modo_visao == "Mês Específico":
             col_v1, col_v2 = st.columns(2)
             with col_v1:
-                mes_rel = st.selectbox("Mês", ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"], key="mrel")
+                mes_rel = st.selectbox("Mês", meses_lista, key="mrel")
             with col_v2:
                 ano_rel = st.number_input("Ano", min_value=2024, max_value=2030, value=datetime.today().year, key="arel")
             
-            m_num = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"].index(mes_rel) + 1
+            m_num = meses_lista.index(mes_rel) + 1
             comp_filtro = f"{ano_rel}-{m_num:02d}"
             
-            # Buscar custo do mês
             res_c = conn.execute("SELECT custo_total FROM custos_mensais WHERE mes_ano=?", (comp_filtro,)).fetchone()
             custo_total_periodo = res_c[0] if res_c else 0.0
             
-            # Buscar registros do mês
             query_dados = '''
                 SELECT t.nome as Refeicao, t.peso as Peso, r.qtd as Quantidade, r.vol_eq as Volume
                 FROM registros r JOIN tipos_refeicao t ON r.id_refeicao = t.id
@@ -534,15 +532,33 @@ elif menu == "Gestão de Custos":
             df_val = pd.read_sql_query(query_dados, conn, params=(comp_filtro,))
             
         else:
-            # Acumulado de todos os registros
+            st.markdown("**Defina o Intervalo de Competência (Início e Fim):**")
+            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+            with col_p1:
+                mes_ini = st.selectbox("Mês Inicial", meses_lista, key="mesini")
+            with col_p2:
+                ano_ini = st.number_input("Ano Inicial", min_value=2024, max_value=2030, value=datetime.today().year, key="anoini")
+            with col_p3:
+                mes_fim = st.selectbox("Mês Final", meses_lista, key="mesfim")
+            with col_p4:
+                ano_fim = st.number_input("Ano Final", min_value=2024, max_value=2030, value=datetime.today().year, key="anofim")
+            
+            m_num_ini = meses_lista.index(mes_ini) + 1
+            m_num_fim = meses_lista.index(mes_fim) + 1
+            
+            comp_ini = f"{ano_ini}-{m_num_ini:02d}"
+            comp_fim = f"{ano_fim}-{m_num_fim:02d}"
+            
+            # Buscar registros dentro do intervalo YYYY-MM
             query_dados = '''
                 SELECT t.nome as Refeicao, t.peso as Peso, r.qtd as Quantidade, r.vol_eq as Volume
                 FROM registros r JOIN tipos_refeicao t ON r.id_refeicao = t.id
+                WHERE substr(r.data, 1, 7) >= ? AND substr(r.data, 1, 7) <= ?
             '''
-            df_val = pd.read_sql_query(query_dados, conn)
+            df_val = pd.read_sql_query(query_dados, conn, params=(comp_ini, comp_fim))
             
-            # Somar todos os custos cadastrados
-            res_c = conn.execute("SELECT sum(custo_total) FROM custos_mensais").fetchone()
+            # Somar os custos mensais informados dentro do intervalo
+            res_c = conn.execute("SELECT sum(custo_total) FROM custos_mensais WHERE mes_ano >= ? AND mes_ano <= ?", (comp_ini, comp_fim)).fetchone()
             custo_total_periodo = res_c[0] if res_c and res_c[0] else 0.0
             
         conn.close()
@@ -552,30 +568,20 @@ elif menu == "Gestão de Custos":
         if df_val.empty:
             st.warning("⚠️ Nenhum registro de produção encontrado para este período.")
         else:
-            # Agrupar por tipo de refeição
             df_resumo = df_val.groupby(['Refeicao', 'Peso']).agg({'Quantidade': 'sum', 'Volume': 'sum'}).reset_index()
-            
             total_vol_geral = df_resumo['Volume'].sum()
             
-            if total_vol_geral > 0:
-                # Custo por ponto de equivalência
-                custo_por_ponto = custo_total_periodo / total_vol_geral
-            else:
-                custo_por_ponto = 0.0
+            custo_por_ponto = (custo_total_periodo / total_vol_geral) if total_vol_geral > 0 else 0.0
                 
-            # Cálculos de ponderação
             df_resumo['Part_%'] = (df_resumo['Volume'] / total_vol_geral * 100) if total_vol_geral > 0 else 0.0
-            # Custo unitário da refeição = Peso * Custo por Ponto
             df_resumo['Custo_Unitario'] = df_resumo['Peso'] * custo_por_ponto
-            # Custo Total Alocado = Quantidade * Custo Unitário
             df_resumo['Custo_Total_Alocado'] = df_resumo['Quantidade'] * df_resumo['Custo_Unitario']
             
-            # Renomear colunas para exibição amigável
             df_exibicao = pd.DataFrame({
                 'Tipo de Refeição': df_resumo['Refeicao'],
                 'Peso': df_resumo['Peso'],
-                'Total de Refeições': df_resumo['Quantidade'],
-                'Volume Equivalente': df_resumo['Volume'],
+                'Total de Refeições': df_resumo['Quantidade'].apply(lambda x: f"{x:,}".replace(",", ".")),
+                'Volume Equivalente': df_resumo['Volume'].apply(lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
                 '% Part. Volume': df_resumo['Part_%'].apply(lambda x: f"{x:.2f}%".replace(".", ",")),
                 'Custo Unitário (R$)': df_resumo['Custo_Unitario'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
                 'Custo Total Alocado (R$)': df_resumo['Custo_Total_Alocado'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
@@ -584,14 +590,13 @@ elif menu == "Gestão de Custos":
             st.divider()
             st.dataframe(df_exibicao, hide_index=True, use_container_width=True)
             
-            # Totais gerais
             tot_fisico = df_resumo['Quantidade'].sum()
             tot_vol = df_resumo['Volume'].sum()
             tot_alocado = df_resumo['Custo_Total_Alocado'].sum()
             
             col_t1, col_t2, col_t3 = st.columns(3)
             col_t1.metric("Total Refeições Físicas", f"{tot_fisico:,}".replace(",", "."))
-            col_t2.metric("Total Volume Equivalente", f"{tot_vol:,.2f}".replace(".", ","))
+            col_t2.metric("Total Volume Equivalente", f"{tot_vol:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
             col_t3.metric("Custo Total Alocado", f"R$ {tot_alocado:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
 # ==========================================
