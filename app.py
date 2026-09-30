@@ -13,9 +13,11 @@ hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
+    header {visibility: hidden !important;}
+    [data-testid="stHeader"] {display: none;}
     </style>
 """
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 def get_connection():
     return sqlite3.connect('nutricontrol.db', check_same_thread=False)
