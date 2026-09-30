@@ -10,12 +10,14 @@ import unicodedata
 # ==========================================
 st.set_page_config(page_title="NutriControl", page_icon="🍽", layout="wide")
 
-# Estilo corrigido: Esconde apenas os elementos do Streamlit sem afetar o calendário!
+# ESTILO CORRIGIDO PARA O MOBILE:
+# Mantém o cabeçalho ativo para não sumir o botão da barra lateral no celular,
+# mas deixa ele transparente e esconde o menu padrão do Streamlit e o rodapé.
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    [data-testid="stHeader"] {display: none;}
+    header {background-color: transparent !important;}
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
