@@ -9,7 +9,14 @@ import unicodedata
 # CONFIGURAÇÃO DA PÁGINA E BANCO DE DADOS
 # ==========================================
 st.set_page_config(page_title="NutriControl", page_icon="🍽", layout="wide")
-
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 def get_connection():
     return sqlite3.connect('nutricontrol.db', check_same_thread=False)
 
