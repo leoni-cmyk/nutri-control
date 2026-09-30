@@ -10,13 +10,18 @@ import unicodedata
 # ==========================================
 st.set_page_config(page_title="NutriControl", page_icon="🍽", layout="wide")
 
-# Estilo para manter o visual limpo, preservando a barra lateral e o botão de menu mobile
+# Estilo limpo + correção para garantir que o texto e as setas do calendário fiquem visíveis
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden !important;}
     [data-testid="stHeader"] {display: none;}
+    
+    /* Garante visibilidade total no pop-up do calendário (setas, mês e ano) */
+    div[data-baseweb="calendar"] button {
+        color: inherit !important;
+    }
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
@@ -29,6 +34,18 @@ def normalizar_texto(texto):
         return ""
     nfkd = unicodedata.normalize('NFKD', texto)
     return "".join([c for c in nfkd if not unicodedata.combining(c)]).strip().lower()
+
+def formatar_inteiro(val):
+    try:
+        return f"{int(val):,}".replace(",", ".")
+    except:
+        return str(val)
+
+def formatar_decimal(val):
+    try:
+        return f"{float(val):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return str(val)
 
 def init_db():
     conn = get_connection()
@@ -106,8 +123,8 @@ if menu == "Início":
         total_vol = df_mes['Volume'].sum()
         
         col1, col2 = st.columns(2)
-        col1.metric("Total de Refeições Físicas no Mês", f"{total_qtd:,}".replace(",", "."))
-        col2.metric("Total de Volume Equivalente (Base)", f"{total_vol:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        col1.metric("Total de Refeições Físicas no Mês", formatar_inteiro(total_qtd))
+        col2.metric("Total de Volume Equivalente (Base)", formatar_decimal(total_vol))
         
         st.divider()
         st.markdown("#### Detalhamento por Tipo de Refeição (Acumulado no Mês)")
@@ -116,7 +133,7 @@ if menu == "Início":
         cols = st.columns(min(len(df_por_refeicao), 4))
         for index, row in df_por_refeicao.iterrows():
             col = cols[index % len(cols)]
-            col.metric(f"Refeição: {row['Refeicao']}", f"{row['Quantidade']:,}".replace(",", "."))
+            col.metric(f"Refeição: {row['Refeicao']}", formatar_inteiro(row['Quantidade']))
             
     st.divider()
     st.info("💡 Navegue pelo menu lateral para gerenciar as operações, monitorar lotes ou extrair o rateio gerencial.")
@@ -214,6 +231,7 @@ elif menu == "Lançamento Diário":
                 st.info("Nenhum dado importado via arquivo até o momento.")
             else:
                 df_importados['Data_Competencia'] = pd.to_datetime(df_importados['Data_Competencia']).dt.strftime('%d/%m/%Y')
+                df_importados['Quantidade'] = df_importados['Quantidade'].apply(formatar_inteiro)
                 st.dataframe(df_importados, hide_index=True, use_container_width=True)
                 
                 apagar_imp = st.selectbox("Selecionar registro importado para remover:", df_importados.apply(lambda x: f"ID {x['id']} - [Lote: {x['Lote']}] {x['Quantidade']}x {x['Refeicao']} no {x['Setor']}", axis=1).tolist())
@@ -235,6 +253,8 @@ elif menu == "Lançamento Diário":
         if df_hoje.empty:
             st.info(f"Nenhum lançamento manual registrado em {data_auditoria.strftime('%d/%m/%Y')}.")
         else:
+            df_hoje['Quantidade'] = df_hoje['Quantidade'].apply(formatar_inteiro)
+            df_hoje['Equivalente'] = df_hoje['Equivalente'].apply(formatar_decimal)
             st.dataframe(df_hoje, hide_index=True, use_container_width=True)
             apagar_reg = st.selectbox("Excluir lançamento manual:", df_hoje.apply(lambda x: f"ID {x['id']} - {x['Quantidade']}x {x['Refeicao']} ({x['Categoria']}) no {x['Setor']}", axis=1).tolist())
             if st.button("🗑 Excluir Manual Selecionado"):
@@ -375,6 +395,8 @@ elif menu == "Central de Importação":
             st.info("Nenhum lote importado até o momento.")
         else:
             df_lotes['Data_Competencia'] = pd.to_datetime(df_lotes['Data_Competencia']).dt.strftime('%d/%m/%Y')
+            df_lotes['Total_Fisico'] = df_lotes['Total_Fisico'].apply(formatar_inteiro)
+            df_lotes['Total_Registros'] = df_lotes['Total_Registros'].apply(formatar_inteiro)
             st.dataframe(df_lotes, hide_index=True, use_container_width=True)
             
             lotes_disponiveis = df_lotes['Lote'].tolist()
@@ -407,7 +429,7 @@ elif menu == "Cadastros Base":
                     conn = get_connection()
                     existente = conn.execute("SELECT id FROM centros_custo WHERE nome=? OR cod_erp=?", (nome_cc, cod_erp)).fetchone()
                     if existente:
-                        st.error("⚠️️ Já existe um Centro de Custo com este Nome ou Código.")
+                        st.error("⚠️ Já existe um Centro de Custo com este Nome ou Código.")
                     else:
                         conn.execute("INSERT INTO centros_custo (nome, cod_erp, classificacao) VALUES (?, ?, ?)", (nome_cc, cod_erp, classificacao))
                         conn.commit()
@@ -448,6 +470,7 @@ elif menu == "Cadastros Base":
         with col2:
             conn = get_connection()
             df_ref = pd.read_sql_query("SELECT id, nome as Refeição, peso as Peso FROM tipos_refeicao", conn)
+            df_ref['Peso'] = df_ref['Peso'].apply(formatar_decimal)
             st.dataframe(df_ref, hide_index=True, use_container_width=True)
             if not df_ref.empty:
                 apagar_ref = st.selectbox("Remover Refeição:", df_ref['Refeição'].tolist())
@@ -489,7 +512,7 @@ elif menu == "Gestão de Custos":
             conn.execute("INSERT OR REPLACE INTO custos_mensais (mes_ano, custo_total) VALUES (?, ?)", (competencia_str, custo_informado))
             conn.commit()
             conn.close()
-            st.success(f"Custo total de {mes_custo}/{ano_custo} (R$ {custo_informado:,.2f}) salvo com sucesso!".replace(",", "X").replace(".", ",").replace("X", "."))
+            st.success(f"Custo total de {mes_custo}/{ano_custo} (R$ {formatar_decimal(custo_informado)}) salvo com sucesso!")
             st.rerun()
             
         st.divider()
@@ -500,7 +523,7 @@ elif menu == "Gestão de Custos":
         if df_hist_custos.empty:
             st.info("Nenhum custo total cadastrado até o momento.")
         else:
-            df_hist_custos['Custo_Total'] = df_hist_custos['Custo_Total'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            df_hist_custos['Custo_Total'] = df_hist_custos['Custo_Total'].apply(lambda x: f"R$ {formatar_decimal(x)}")
             st.dataframe(df_hist_custos, hide_index=True, use_container_width=True)
 
     with tab_rel_custo:
@@ -549,7 +572,6 @@ elif menu == "Gestão de Custos":
             comp_ini = f"{ano_ini}-{m_num_ini:02d}"
             comp_fim = f"{ano_fim}-{m_num_fim:02d}"
             
-            # Buscar registros dentro do intervalo YYYY-MM
             query_dados = '''
                 SELECT t.nome as Refeicao, t.peso as Peso, r.qtd as Quantidade, r.vol_eq as Volume
                 FROM registros r JOIN tipos_refeicao t ON r.id_refeicao = t.id
@@ -557,13 +579,12 @@ elif menu == "Gestão de Custos":
             '''
             df_val = pd.read_sql_query(query_dados, conn, params=(comp_ini, comp_fim))
             
-            # Somar os custos mensais informados dentro do intervalo
             res_c = conn.execute("SELECT sum(custo_total) FROM custos_mensais WHERE mes_ano >= ? AND mes_ano <= ?", (comp_ini, comp_fim)).fetchone()
             custo_total_periodo = res_c[0] if res_c and res_c[0] else 0.0
             
         conn.close()
         
-        st.metric("Custo Total Informado para o Período", f"R$ {custo_total_periodo:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        st.metric("Custo Total Informado para o Período", f"R$ {formatar_decimal(custo_total_periodo)}")
         
         if df_val.empty:
             st.warning("⚠️ Nenhum registro de produção encontrado para este período.")
@@ -579,12 +600,12 @@ elif menu == "Gestão de Custos":
             
             df_exibicao = pd.DataFrame({
                 'Tipo de Refeição': df_resumo['Refeicao'],
-                'Peso': df_resumo['Peso'],
-                'Total de Refeições': df_resumo['Quantidade'].apply(lambda x: f"{x:,}".replace(",", ".")),
-                'Volume Equivalente': df_resumo['Volume'].apply(lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
+                'Peso': df_resumo['Peso'].apply(formatar_decimal),
+                'Total de Refeições': df_resumo['Quantidade'].apply(formatar_inteiro),
+                'Volume Equivalente': df_resumo['Volume'].apply(formatar_decimal),
                 '% Part. Volume': df_resumo['Part_%'].apply(lambda x: f"{x:.2f}%".replace(".", ",")),
-                'Custo Unitário (R$)': df_resumo['Custo_Unitario'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
-                'Custo Total Alocado (R$)': df_resumo['Custo_Total_Alocado'].apply(lambda x: f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                'Custo Unitário (R$)': df_resumo['Custo_Unitario'].apply(lambda x: f"R$ {formatar_decimal(x)}"),
+                'Custo Total Alocado (R$)': df_resumo['Custo_Total_Alocado'].apply(lambda x: f"R$ {formatar_decimal(x)}")
             })
             
             st.divider()
@@ -595,9 +616,9 @@ elif menu == "Gestão de Custos":
             tot_alocado = df_resumo['Custo_Total_Alocado'].sum()
             
             col_t1, col_t2, col_t3 = st.columns(3)
-            col_t1.metric("Total Refeições Físicas", f"{tot_fisico:,}".replace(",", "."))
-            col_t2.metric("Total Volume Equivalente", f"{tot_vol:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-            col_t3.metric("Custo Total Alocado", f"R$ {tot_alocado:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            col_t1.metric("Total Refeições Físicas", formatar_inteiro(tot_fisico))
+            col_t2.metric("Total Volume Equivalente", formatar_decimal(tot_vol))
+            col_t3.metric("Custo Total Alocado", f"R$ {formatar_decimal(tot_alocado)}")
 
 # ==========================================
 # MÓDULO 3: PAINEL GERENCIAL E EXPORTAÇÃO
@@ -664,7 +685,12 @@ elif menu == "Painel Gerencial":
                 colunas_refeicoes = [col for col in df_pivot.columns if col not in ['Centro_Custo', 'Codigo_CC']]
                 df_pivot['Total_Setor'] = df_pivot[colunas_refeicoes].sum(axis=1)
                 
-                st.dataframe(df_pivot, hide_index=True, use_container_width=True)
+                df_pivot_exibicao = df_pivot.copy()
+                for col in colunas_refeicoes + ['Total_Setor']:
+                    df_pivot_exibicao[col] = df_pivot_exibicao[col].apply(formatar_decimal)
+                
+                st.dataframe(df_pivot_exibicao, hide_index=True, use_container_width=True)
+                
                 csv = df_pivot.to_csv(index=False, sep=';', decimal=',')
                 st.download_button("📥 Exportar Matriz de Rateio (.CSV)", data=csv, file_name='rateio_detalhado_NutriControl.csv', mime='text/csv', use_container_width=True)
                     
@@ -678,9 +704,13 @@ elif menu == "Painel Gerencial":
                     st.bar_chart(data=df_comp, x='Mes_Ano', y=coluna_valor, color="#1E293B")
                 with c2:
                     df_exibicao_comp = df_comp.rename(columns={'Mes_Ano': 'Mês de Referência', coluna_valor: 'Total Servido'})
+                    df_exibicao_comp['Total Servido'] = df_exibicao_comp['Total Servido'].apply(formatar_decimal)
                     st.dataframe(df_exibicao_comp, hide_index=True, use_container_width=True)
 
             st.divider()
             st.subheader("Auditoria de Lançamentos (Base Filtrada)")
-            df_filtrado['Data'] = pd.to_datetime(df_filtrado['Data']).dt.strftime('%d/%m/%Y')
-            st.dataframe(df_filtrado.drop(columns=['Data_Original', 'Mes_Ano'], errors='ignore'), hide_index=True, use_container_width=True)
+            df_filtrado_exib = df_filtrado.drop(columns=['Data_Original', 'Mes_Ano'], errors='ignore').copy()
+            df_filtrado_exib['Data'] = pd.to_datetime(df_filtrado_exib['Data']).dt.strftime('%d/%m/%Y')
+            df_filtrado_exib['Quantidade'] = df_filtrado_exib['Quantidade'].apply(formatar_inteiro)
+            df_filtrado_exib['Volume_Equivalente'] = df_filtrado_exib['Volume_Equivalente'].apply(formatar_decimal)
+            st.dataframe(df_filtrado_exib, hide_index=True, use_container_width=True)
