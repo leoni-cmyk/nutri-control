@@ -10,7 +10,7 @@ import unicodedata
 # ==========================================
 st.set_page_config(page_title="NutriControl", page_icon="🍽", layout="wide")
 
-# Estilo limpo + correção para garantir que o texto e as setas do calendário fiquem visíveis
+# Estilo limpo + CORREÇÃO DEFINITIVA DO CALENDÁRIO (Forçando contraste)
 hide_streamlit_style = """
     <style>
     #MainMenu {visibility: hidden;}
@@ -18,9 +18,12 @@ hide_streamlit_style = """
     header {visibility: hidden !important;}
     [data-testid="stHeader"] {display: none;}
     
-    /* Garante visibilidade total no pop-up do calendário (setas, mês e ano) */
-    div[data-baseweb="calendar"] button {
-        color: inherit !important;
+    /* Garante que textos, meses, anos e setas do calendário fiquem sempre pretos e visíveis */
+    div[data-baseweb="calendar"], div[data-baseweb="calendar"] * {
+        color: #000000 !important;
+    }
+    div[data-baseweb="calendar"] svg {
+        fill: #000000 !important;
     }
     </style>
 """
@@ -487,9 +490,11 @@ elif menu == "Gestão de Custos":
     st.header("Gestão de Custos e Valoração por Ponderação")
     st.markdown("Informe o custo total do setor de nutrição por mês para calcular o custo unitário e o valor alocado de cada refeição.")
     
-    tab_lanc_custo, tab_rel_custo = st.tabs(["💰 Lançar Custo do Mês", "📊 Matriz de Custo Unitário e Rateio"])
+    tab_lanc_custo, tab_rel_custo = st.tabs(["💰 Lançar / Editar Custos", "📊 Matriz de Custo Unitário e Rateio"])
     
     with tab_lanc_custo:
+        st.markdown("**1. Inserir ou Atualizar Custo:**")
+        st.info("💡 **Dica:** Para *editar* um custo já lançado, basta selecionar o mesmo mês e ano e salvar o novo valor. Ele substituirá o valor antigo automaticamente.")
         col_c1, col_c2, col_c3 = st.columns(3)
         with col_c1:
             mes_custo = st.selectbox("Mês de Competência", 
@@ -516,15 +521,25 @@ elif menu == "Gestão de Custos":
             st.rerun()
             
         st.divider()
-        st.markdown("#### Histórico de Custos Totais Lançados")
+        st.markdown("**2. Auditoria e Exclusão de Custos Lançados:**")
         conn = get_connection()
         df_hist_custos = pd.read_sql_query("SELECT mes_ano as Competencia, custo_total as Custo_Total FROM custos_mensais ORDER BY mes_ano DESC", conn)
-        conn.close()
+        
         if df_hist_custos.empty:
             st.info("Nenhum custo total cadastrado até o momento.")
         else:
-            df_hist_custos['Custo_Total'] = df_hist_custos['Custo_Total'].apply(lambda x: f"R$ {formatar_decimal(x)}")
-            st.dataframe(df_hist_custos, hide_index=True, use_container_width=True)
+            df_hist_custos_exibicao = df_hist_custos.copy()
+            df_hist_custos_exibicao['Custo_Total'] = df_hist_custos_exibicao['Custo_Total'].apply(lambda x: f"R$ {formatar_decimal(x)}")
+            st.dataframe(df_hist_custos_exibicao, hide_index=True, use_container_width=True)
+            
+            # Recurso de Exclusão explícito
+            apagar_custo = st.selectbox("Selecione um lançamento para excluir definitivamente:", df_hist_custos['Competencia'].tolist())
+            if st.button("🗑 Excluir Lançamento Selecionado"):
+                conn.execute("DELETE FROM custos_mensais WHERE mes_ano=?", (apagar_custo,))
+                conn.commit()
+                st.success(f"Custo da competência {apagar_custo} removido com sucesso!")
+                st.rerun()
+        conn.close()
 
     with tab_rel_custo:
         st.markdown("#### Análise de Valoração e Custo Unitário")
